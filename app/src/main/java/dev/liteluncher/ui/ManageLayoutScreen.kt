@@ -3,8 +3,11 @@ package dev.liteluncher.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -13,7 +16,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -182,6 +187,7 @@ fun ManageLayoutScreen(state: LauncherState, apps: List<AppEntry>, repository: A
     }
 }
 }
+}
 
 @Composable
 private fun ScreenCard(
@@ -196,26 +202,28 @@ private fun ScreenCard(
         modifier = Modifier.size(110.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Surface(
-            modifier = Modifier
-                .size(92.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .border(BorderStroke(1.dp, CardBorder)),
-            color = if (enabled) FrostedGlass else Color(0x40222222),
-            contentColor = Color.White
-        ) {
-            Icon(icon, null, modifier = Modifier.size(40.dp), tint = if (enabled) Color.White else Color.White.copy(alpha = .4f))
-        }
-        if (!isCenter) {
-            Box(
-                modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
-                contentAlignment = Alignment.Center
+        Box {
+            Surface(
+                modifier = Modifier
+                    .size(92.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(BorderStroke(1.dp, CardBorder)),
+                color = if (enabled) FrostedGlass else Color(0x40222222),
+                contentColor = Color.White
             ) {
-                IconButton(
-                    onClick = { onToggle(!enabled) },
-                    modifier = Modifier.size(24.dp).background(RedBadge, CircleShape)
+                Icon(icon, null, modifier = Modifier.size(40.dp), tint = if (enabled) Color.White else Color.White.copy(alpha = .4f))
+            }
+            if (!isCenter) {
+                Box(
+                    modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Rounded.Close, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    IconButton(
+                        onClick = { onToggle(!enabled) },
+                        modifier = Modifier.size(24.dp).background(RedBadge, CircleShape)
+                    ) {
+                        Icon(Icons.Rounded.Close, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
                 }
             }
         }
