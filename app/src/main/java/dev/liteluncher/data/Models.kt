@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 enum class Screen(val title: String, val x: Int, val y: Int) {
-    HOME("Home", 0, 0), SEARCH("Search", 0, -1), APPS("Applications", 1, 0),
+    HOME("Home Screen", 0, 0), SEARCH("Search", 0, -1), APPS("Application List", 1, 0),
     DESKTOP("Desktop", -1, 0), FAVORITES("Favorites", 0, 1)
 }
 
@@ -15,42 +15,64 @@ enum class ThemeMode { LIGHT, DARK, SYSTEM, ADVANCED }
 @Serializable
 enum class SurfaceTheme { GLASS, DARK, LIGHT, ACCENT }
 @Serializable
-enum class IconShape { SQUIRCLE, CIRCLE, ROUNDED_SQUARE, ORIGINAL }
+enum class IconShape { SQUIRCLE, CIRCLE, ROUNDED_SQUARE, TEARDROP, ORIGINAL }
 @Serializable
-enum class WebEngine { GOOGLE, BING, DUCKDUCKGO, YAHOO, WIKIPEDIA, BAIDU, ECOSIA, STARTPAGE, CUSTOM }
+enum class WebEngine { GOOGLE, BING, DUCKDUCKGO, YAHOO, WIKIPEDIA, BAIDU, ECOSIA, NAVER, QWANT, STARTPAGE, BRAVE, CUSTOM }
+
+fun WebEngine.displayName(): String = when (this) {
+    WebEngine.GOOGLE -> "Google"
+    WebEngine.BING -> "Bing"
+    WebEngine.DUCKDUCKGO -> "DuckDuckGo"
+    WebEngine.YAHOO -> "Yahoo!"
+    WebEngine.WIKIPEDIA -> "Wikipedia"
+    WebEngine.BAIDU -> "Baidu"
+    WebEngine.ECOSIA -> "Ecosia"
+    WebEngine.NAVER -> "Naver"
+    WebEngine.QWANT -> "Qwant"
+    WebEngine.STARTPAGE -> "Startpage.com"
+    WebEngine.BRAVE -> "Brave"
+    WebEngine.CUSTOM -> "Custom URL"
+}
+
 @Serializable
 enum class Gesture { HOME, DOUBLE_TAP, SWIPE_UP, SWIPE_DOWN, SWIPE_LEFT, SWIPE_RIGHT, TWO_UP, TWO_DOWN, TWO_LEFT, TWO_RIGHT, PINCH_IN, PINCH_OUT }
 @Serializable
-enum class Action { NONE, HOME, SEARCH, APPS, DESKTOP, FAVORITES, SETTINGS, SCREEN_MANAGER, WALLPAPER, APP, SHORTCUT, NAVIGATE }
+enum class Action { NONE, HOME, SEARCH, APPS, DESKTOP, FAVORITES, SETTINGS, SCREEN_MANAGER, WALLPAPER, APP, SHORTCUT, NAVIGATE, NOTIFICATIONS }
 @Serializable
 data class GestureBinding(val action: Action = Action.NONE, val target: String = "", val shortcutId: String = "")
 
-fun defaultGestures(): Map<Gesture, GestureBinding> = mapOf(
-    Gesture.HOME to GestureBinding(Action.HOME), Gesture.DOUBLE_TAP to GestureBinding(Action.SEARCH),
-    Gesture.SWIPE_UP to GestureBinding(Action.NAVIGATE), Gesture.SWIPE_DOWN to GestureBinding(Action.NAVIGATE),
-    Gesture.SWIPE_LEFT to GestureBinding(Action.NAVIGATE), Gesture.SWIPE_RIGHT to GestureBinding(Action.NAVIGATE),
-    Gesture.TWO_UP to GestureBinding(Action.NAVIGATE), Gesture.TWO_DOWN to GestureBinding(Action.NAVIGATE),
-    Gesture.TWO_LEFT to GestureBinding(Action.NAVIGATE), Gesture.TWO_RIGHT to GestureBinding(Action.NAVIGATE),
-    Gesture.PINCH_IN to GestureBinding(Action.SCREEN_MANAGER), Gesture.PINCH_OUT to GestureBinding(Action.HOME)
-)
+fun defaultGestures(): Map<Gesture, GestureBinding> = Gesture.entries.associateWith {
+    GestureBinding(if (it == Gesture.TWO_DOWN) Action.NOTIFICATIONS else Action.NONE)
+}
+
+@Serializable
+enum class SearchTarget(val title: String) {
+    APPS("Apps"), HIDDEN_APPS("Hidden Apps"), CONTACTS("Contacts"), SHORTCUTS("Shortcuts"),
+    SETTINGS("Settings"), MATH("Math calculation"), WEB("Web-Search"), PLAY_STORE("Search on Google Play"), WEBSITE("Open Website")
+}
 
 @Serializable
 data class GridPrefs(
-    val columns: Int = 4, val rows: Int = 6, val iconScale: Float = 1f,
+    val columns: Int = 4, val rows: Int = 5, val iconScale: Float = 1f,
     val labels: Boolean = true, val multiline: Boolean = false,
-    val padding: Int = 20, val spacing: Int = 16, val listMode: Boolean = false
+    val padding: Int = 20, val spacing: Int = 16, val listMode: Boolean = false,
+    val textScale: Float = 1f, val intermediateSteps: Int = 0, val borderPadding: String = "Default",
+    val preventChanges: Boolean = false
 )
 @Serializable
 data class ClockPrefs(
     val enabled: Boolean = true, val use24Hour: Boolean = false, val size: Int = 76,
-    val color: String = "#F3F5ED", val font: String = "Light", val showYear: Boolean = true
+    val color: String = "#C0FFFFFF", val font: String = "Light", val showYear: Boolean = false,
+    val analog: Boolean = false, val clockApp: String = "Clock", val showDate: Boolean = true,
+    val showDay: Boolean = true, val textScale: Float = .85f
 )
 @Serializable
 data class DockPrefs(
-    val enabled: Boolean = true, val side: String = "Right", val alignment: Float = .55f,
-    val iconScale: Float = .9f, val maxItems: Int = 5, val autoHide: Boolean = false,
-    val hideOnScroll: Boolean = true, val fullWidth: Boolean = false, val folderStack: Boolean = true,
-    val labels: Boolean = false, val padding: Int = 8
+    val enabled: Boolean = true, val side: String = "Right", val alignment: Float = .5f,
+    val iconScale: Float = 1f, val maxItems: Int = 5, val autoHide: Boolean = false,
+    val hideOnScroll: Boolean = false, val fullWidth: Boolean = false, val folderStack: Boolean = true,
+    val labels: Boolean = false, val padding: Int = 8, val allApps: Boolean = false,
+    val allAppsLeft: Boolean = false, val showWhenScrolling: Boolean = false, val preventChanges: Boolean = false
 )
 @Serializable
 data class NavigationPrefs(
@@ -61,37 +83,50 @@ data class NavigationPrefs(
 data class SearchPrefs(
     val apps: Boolean = true, val hiddenApps: Boolean = false, val contacts: Boolean = false,
     val shortcuts: Boolean = true, val settings: Boolean = true, val math: Boolean = true,
-    val web: Boolean = true, val playStore: Boolean = true, val history: Boolean = true,
+    val web: Boolean = false, val playStore: Boolean = true, val history: Boolean = true,
     val engine: WebEngine = WebEngine.GOOGLE, val customUrl: String = "https://www.google.com/search?q={query}",
-    val grid: GridPrefs = GridPrefs(columns = 4)
+    val grid: GridPrefs = GridPrefs(columns = 4), val website: Boolean = true,
+    val targetOrder: List<SearchTarget> = SearchTarget.entries.toList(),
+    val barScreens: Set<Screen> = setOf(Screen.HOME, Screen.APPS, Screen.FAVORITES),
+    val barAtBottom: Boolean = false, val barText: String = "Search", val hint: Boolean = true, val voice: Boolean = true
 )
 @Serializable
 data class DesktopPrefs(
-    val columns: Int = 4, val rows: Int = 8, val padding: Int = 8, val cornerRadius: Int = 24,
-    val grid: GridPrefs = GridPrefs(columns = 4, rows = 8)
+    val columns: Int = 5, val rows: Int = 7, val padding: Int = 8, val cornerRadius: Int = 24,
+    val grid: GridPrefs = GridPrefs(columns = 5, rows = 7), val hint: Boolean = true,
+    val widgetPadding: Boolean = false, val rounded: Boolean = true, val pageCount: Int = 1,
+    val preventChanges: Boolean = false
 )
 @Serializable
 data class FavoritesPrefs(
-    val byUsage: Boolean = true, val excludeDock: Boolean = true, val excludeFolders: Boolean = true,
-    val showContacts: Boolean = true, val maxItems: Int = 12, val grid: GridPrefs = GridPrefs()
+    val byUsage: Boolean = true, val excludeDock: Boolean = true, val excludeFolders: Boolean = false,
+    val showContacts: Boolean = false, val maxItems: Int = 12, val grid: GridPrefs = GridPrefs(), val itemsPerRow: Int = 0,
+    val reverse: Boolean = false, val excluded: Set<String> = emptySet()
 )
 @Serializable
 data class AppearancePrefs(
     val mode: ThemeMode = ThemeMode.DARK, val launcher: SurfaceTheme = SurfaceTheme.GLASS,
-    val dock: SurfaceTheme = SurfaceTheme.DARK, val search: SurfaceTheme = SurfaceTheme.DARK,
+    val dock: SurfaceTheme = SurfaceTheme.GLASS, val search: SurfaceTheme = SurfaceTheme.GLASS,
     val dim: Float = .32f, val accent: String = "#C1F17C", val iconPack: String = "",
     val iconShape: IconShape = IconShape.SQUIRCLE, val lightStatusIcons: Boolean = true,
-    val lightNavigationIcons: Boolean = true
+    val lightNavigationIcons: Boolean = true, val darkTexts: Boolean = false,
+    val dimMode: String = "Follow Theme", val backgroundColor: String = "#80000000", val forceAdaptive: Boolean = false,
+    val statusIcons: String = "Follow Theme", val navigationIcons: String = "Follow Theme",
+    val customBarColor: Boolean = false, val statusColor: String = "#00000000", val navigationColor: String = "#00000000"
 )
 @Serializable
-data class BadgePrefs(val enabled: Boolean = false, val counts: Boolean = false, val color: String = "#C1F17C", val scale: Float = 1f)
+data class BadgePrefs(val enabled: Boolean = true, val counts: Boolean = false, val color: String = "#FF266AB3", val scale: Float = 1f, val style: String = "Follow Theme")
 @Serializable
-data class FolderPrefs(val color: String = "#242A25", val opacity: Float = .95f, val stacked: Boolean = true, val iconScale: Float = 1f)
+data class FolderPrefs(val color: String = "#80303030", val opacity: Float = 1f, val stacked: Boolean = true, val iconScale: Float = 1f,
+    val background: String = "Follow Theme", val shape: IconShape = IconShape.SQUIRCLE, val iconColor: String = "#A0FFFFFF",
+    val labels: Boolean = true, val textScale: Float = 1f, val multiline: Boolean = false)
 @Serializable
 data class BehaviorPrefs(
     val lockRotation: Boolean = true, val showStatusBar: Boolean = true,
-    val wallpaperScroll: String = "Parallax", val horizontalTransition: String = "Slide",
-    val verticalTransition: String = "Fade", val borders: Boolean = true, val animations: Boolean = true
+    val wallpaperScroll: String = "Off", val horizontalTransition: String = "Slide",
+    val verticalTransition: String = "Fade", val borders: Boolean = false, val animations: Boolean = true,
+    val pageIndicators: Boolean = true, val returnHome: Boolean = true, val contextSettings: Boolean = true,
+    val wallpaperAlignment: String = "Center"
 )
 @Serializable
 data class LauncherPrefs(
@@ -103,11 +138,11 @@ data class LauncherPrefs(
     val behavior: BehaviorPrefs = BehaviorPrefs(), val gestures: Map<Gesture, GestureBinding> = defaultGestures()
 )
 @Serializable
-data class AppOverride(val label: String = "", val iconUri: String = "")
+data class AppOverride(val label: String = "", val iconUri: String = "", val shape: IconShape? = null)
 @Serializable
-data class FolderItem(val id: String, val name: String, val apps: List<String> = emptyList())
+data class FolderItem(val id: String, val name: String, val apps: List<String> = emptyList(), val iconUri: String = "", val shape: IconShape? = null)
 @Serializable
-data class WidgetItem(val id: Int, val column: Int = 0, val row: Int = 0, val columns: Int = 4, val rows: Int = 2)
+data class WidgetItem(val id: Int, val column: Int = 0, val row: Int = 0, val columns: Int = 4, val rows: Int = 2, val page: Int = 0)
 @Serializable
 data class PinnedShortcut(val id: String, val packageName: String, val label: String, val userSerial: Long = 0)
 @Serializable
@@ -119,5 +154,5 @@ data class LauncherState(
     val dockFolders: List<String> = emptyList(), val widgets: List<WidgetItem> = emptyList(),
     val contacts: List<String> = emptyList(), val shortcuts: List<PinnedShortcut> = emptyList(),
     val overrides: Map<String, AppOverride> = emptyMap(), val history: List<String> = emptyList(),
-    val launches: Map<String, Int> = emptyMap(), val initialized: Boolean = false
+    val launches: Map<String, Int> = emptyMap(), val desktopApps: Map<Int, List<String>> = emptyMap(), val initialized: Boolean = false
 )

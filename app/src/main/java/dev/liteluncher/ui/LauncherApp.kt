@@ -11,15 +11,17 @@ import android.os.UserManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -27,6 +29,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -95,6 +99,20 @@ fun LauncherApp(
     var dockWakeSignal by remember { mutableIntStateOf(0) }
     var usage by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
     var iconPacks by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+
+    // Deletion snackbar state with Undo
+    var snackbarVisible by remember { mutableStateOf(false) }
+    var snackbarMessage by remember { mutableStateOf("Entry deleted") }
+    var lastDeletedWidget by remember { mutableStateOf<WidgetItem?>(null) }
+    var lastDeletedAppKey by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
+
+    // Multi-page desktop support
+    var currentDesktopPage by rememberSaveable { mutableIntStateOf(0) }
+
+    // Drag and drop state
+    var draggingAppKey by remember { mutableStateOf<String?>(null) }
+    var dragDestinationCapsule by remember { mutableStateOf<String?>(null) }
+
     val toast: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     val launch: (AppEntry) -> Unit = { app ->
         if (model.apps.launch(app)) {
@@ -109,6 +127,7 @@ fun LauncherApp(
         dockWakeSignal++
         folder = null
     }
+
     fun perform(binding: GestureBinding) {
         when (binding.action) {
             Action.NONE -> Unit
@@ -121,6 +140,7 @@ fun LauncherApp(
             Action.SETTINGS -> panel = "settings"
             Action.SCREEN_MANAGER -> panel = "screens"
             Action.WALLPAPER -> SystemActions.wallpaper(activity)
+            Action.NOTIFICATIONS -> SystemActions.notificationAccess(context)
             Action.APP -> apps.find { it.key == binding.target }?.let(launch) ?: toast("Choose an available app for this gesture")
             Action.SHORTCUT -> {
                 val component = android.content.ComponentName.unflattenFromString(binding.target.substringBeforeLast('|'))
@@ -131,6 +151,7 @@ fun LauncherApp(
             }
         }
     }
+
     val actions = WorkspaceActions(
         launch = launch, menu = { appMenu = it }, navigate = navigate, settings = { panel = "settings" },
         manageScreens = { panel = "screens" }, manageLayout = { panel = "layout" }, widgets = { widgetPicker = true },
@@ -168,6 +189,15 @@ fun LauncherApp(
         dockAwake = true
         if (state.prefs.dock.autoHide) { delay(3500); dockAwake = false }
     }
+
+    // Auto-dismiss deletion snackbar after 4 seconds
+    LaunchedEffect(snackbarVisible) {
+        if (snackbarVisible) {
+            delay(4000)
+            snackbarVisible = false
+        }
+    }
+
     SideEffect {
         if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets)
         val controller = WindowCompat.getInsetsController(activity.window, view)
@@ -176,8 +206,12 @@ fun LauncherApp(
         if (state.prefs.behavior.showStatusBar) controller.show(WindowInsetsCompat.Type.statusBars())
         else controller.hide(WindowInsetsCompat.Type.statusBars())
         controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        val requested = if (state.prefs.behavior.lockRotation) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+
+        // Tablet-only rotation restriction: Phone locked to portrait; tablets allowed to rotate
+        val isTablet = context.resources.configuration.smallestScreenWidthDp >= 600
+        val requested = if (state.prefs.behavior.lockRotation && !isTablet) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         if (activity.requestedOrientation != requested) activity.requestedOrientation = requested
+
         val offsets = when (state.prefs.behavior.wallpaperScroll) {
             "Off" -> .5f to .5f
             "Horizontal" -> (.5f + manager.current.x * .5f) to .5f
@@ -185,6 +219,7 @@ fun LauncherApp(
         }
         runCatching { if (view.windowToken != null) WallpaperManager.getInstance(context).setWallpaperOffsets(view.windowToken, offsets.first, offsets.second) }
     }
+
     BackHandler(enabled = panel.isNotEmpty() || manager.current != Screen.HOME || folder != null) {
         when { folder != null -> folder = null; panel.isNotEmpty() -> panel = ""; else -> { query = ""; navigate(Screen.HOME) } }
     }
@@ -205,15 +240,44 @@ fun LauncherApp(
                 SurfaceTheme.ACCENT -> baseScheme.primary.copy(alpha = .75f)
                 else -> baseScheme.surface
             })
+
+        // Background Blur & Scrim: Entering Search or Screen Manager applies a real-time Gaussian blur and 50% black scrim (#80000000)
+        val shouldBlur = manager.current == Screen.SEARCH || panel == "screens"
+
         MaterialTheme(colorScheme = workspaceScheme) {
         CompositionLocalProvider(LocalContentColor provides foreground) {
             val gradient = if (baseScheme.background.luminance() > .5f) listOf(Color(0xFFEAF3DF).copy(alpha = .88f), Color(0xFFB5CCAC).copy(alpha = .8f))
                 else listOf(Color(0xFF101E19).copy(alpha = .56f), Color(0xFF36503E).copy(alpha = .3f), Color(0xFF18211D).copy(alpha = .68f))
-            Box(Modifier.fillMaxSize().background(Brush.linearGradient(gradient))) {
+
+            Box(
+                Modifier.fillMaxSize()
+                    .then(if (shouldBlur) Modifier.blur(20.dp) else Modifier)
+                    .background(Brush.linearGradient(gradient))
+            ) {
                 if (launcherSurface != SurfaceTheme.GLASS) Box(Modifier.fillMaxSize().background(surfaceColor(launcherSurface, MaterialTheme.colorScheme.primary)))
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = state.prefs.appearance.dim)))
-                if (!ready) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Lime) }
-                else if (panel.isNotEmpty()) {
+
+                // 50% black scrim (#80000000) when Search or Screen Manager is active
+                if (shouldBlur) {
+                    Box(Modifier.fillMaxSize().background(Color(0x80000000)))
+                }
+
+                // Ghosted Clock Watermark: When fading into Favorites or Search, retain the Home screen’s Date & Time header as stationary background layer at ~25% opacity
+                if (manager.current == Screen.SEARCH || manager.current == Screen.FAVORITES) {
+                    Box(
+                        Modifier.fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.safeDrawing)
+                            .padding(horizontal = state.prefs.home.padding.dp)
+                    ) {
+                        Box(Modifier.alpha(0.25f)) {
+                            ClockHeader(state.prefs.clock)
+                        }
+                    }
+                }
+
+                if (!ready) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Lime) }
+                } else if (panel.isNotEmpty()) {
                     MaterialTheme(colorScheme = baseScheme) {
                     CompositionLocalProvider(LocalContentColor provides baseScheme.onSurface) {
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -244,9 +308,11 @@ fun LauncherApp(
                             } else perform(binding)
                             dockWakeSignal++
                         }, onPinch = { inward -> perform(state.prefs.gestures[if (inward) Gesture.PINCH_IN else Gesture.PINCH_OUT] ?: GestureBinding()) })
+
                     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).then(gestureModifier).nestedScroll(nestedScroll)) {
                         if (storageError != null) Text(storageError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
                             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
+
                         Row(Modifier.fillMaxWidth().padding(start = 23.dp, end = 15.dp, top = 8.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Row(Modifier.weight(1f).clickable { panel = "screens" }, verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(6.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
@@ -257,80 +323,242 @@ fun LauncherApp(
                             IconButton(onClick = { navigate(Screen.SEARCH) }) { Icon(Icons.Rounded.Search, "Search", modifier = Modifier.size(21.dp)) }
                             IconButton(onClick = { panel = "settings" }) { Icon(Icons.Rounded.Tune, "Launcher settings", modifier = Modifier.size(20.dp)) }
                         }
-                        AnimatedContent(targetState = manager.current, modifier = Modifier.weight(1f), transitionSpec = {
-                            val horizontal = initialState.x != targetState.x
-                            val style = if (horizontal) state.prefs.behavior.horizontalTransition else state.prefs.behavior.verticalTransition
-                            val duration = if (state.prefs.behavior.animations && style != "None") 240 else 0
-                            when {
-                                style == "Slide" && horizontal -> {
+
+                        // Directional Asymmetry Transitions:
+                        // - Horizontal Swipes: 1:1 slide physics with spring-damping between Desktop, Home, Apps
+                        // - Vertical Swipes: Dissolve/crossfade fade transitions (no vertical sliding) between Search, Home, Favorites
+                        AnimatedContent(
+                            targetState = manager.current,
+                            modifier = Modifier.weight(1f),
+                            transitionSpec = {
+                                val horizontal = initialState.x != targetState.x
+                                if (horizontal) {
                                     val sign = if (targetState.x > initialState.x) 1 else -1
-                                    (slideInHorizontally(tween(duration)) { it * sign } + fadeIn(tween(duration))) togetherWith
-                                        (slideOutHorizontally(tween(duration)) { -it * sign } + fadeOut(tween(duration)))
+                                    (slideInHorizontally(spring(dampingRatio = 0.85f, stiffness = 400f)) { it * sign } + fadeIn(tween(180))) togetherWith
+                                        (slideOutHorizontally(spring(dampingRatio = 0.85f, stiffness = 400f)) { -it * sign } + fadeOut(tween(180)))
+                                } else {
+                                    // Vertical Swipes: Dissolve/crossfade fade transitions (no vertical sliding)
+                                    fadeIn(tween(240)) togetherWith fadeOut(tween(240))
                                 }
-                                style == "Slide" -> {
-                                    val sign = if (targetState.y > initialState.y) 1 else -1
-                                    (slideInVertically(tween(duration)) { it * sign } + fadeIn(tween(duration))) togetherWith
-                                        (slideOutVertically(tween(duration)) { -it * sign } + fadeOut(tween(duration)))
-                                }
-                                else -> fadeIn(tween(duration)) togetherWith fadeOut(tween(duration))
-                            }
-                        }, label = "Directional workspace") { screen ->
-                            Box(Modifier.fillMaxSize().padding(start = if (state.prefs.dock.side == "Left") dockSpace else 0.dp,
-                                end = if (state.prefs.dock.side == "Right") dockSpace else 0.dp)) {
+                            },
+                            label = "Directional workspace"
+                        ) { screen ->
+                            Box(Modifier.fillMaxSize().padding(
+                                start = if (state.prefs.dock.side == "Left") dockSpace else 0.dp,
+                                end = if (state.prefs.dock.side == "Right") dockSpace else 0.dp
+                            )) {
                                 when (screen) {
-                                    Screen.HOME -> HomeScreen(state, apps, model.apps, badges, actions, { emptyMenu = true }, {
-                                        perform(state.prefs.gestures[Gesture.DOUBLE_TAP] ?: GestureBinding())
-                                    })
-                                    Screen.APPS -> AppDrawer(state, apps, model.apps, badges, actions)
-                                    Screen.SEARCH -> SearchScreen(state, apps, model.apps, badges, permissionSignal, query, { query = it }, onVoice, actions)
-                                    Screen.FAVORITES -> FavoritesScreen(state, apps, model.apps, badges, usage, permissionSignal, actions)
-                                    Screen.DESKTOP -> Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-                                        val renderedWidgets = state.widgets
-                                        PageHeader("Your space", "Desktop", Icons.Rounded.Add, { widgetPicker = true })
-                                        if (state.widgets.isEmpty()) EmptyCard(Icons.Rounded.Widgets, "Room for your widgets", "A quiet canvas for calendars, notes, and the things you want to keep in view.", "Add a widget", { widgetPicker = true })
-                                        WidgetCanvas(widgets, state.prefs.desktop, renderedWidgets, { list ->
-                                            model.store.update { it.copy(widgets = mergeWidgetEdits(it.widgets, renderedWidgets, list)) }
-                                        }, Modifier.weight(1f).fillMaxWidth())
+                                    Screen.HOME -> HomeScreen(
+                                        state = state,
+                                        apps = apps,
+                                        repository = model.apps,
+                                        badges = badges,
+                                        actions = actions,
+                                        onEmpty = { emptyMenu = true },
+                                        onDoubleTap = { perform(state.prefs.gestures[Gesture.DOUBLE_TAP] ?: GestureBinding()) },
+                                        onVoice = onVoice
+                                    )
+                                    Screen.APPS -> AppDrawer(
+                                        state = state,
+                                        apps = apps,
+                                        repository = model.apps,
+                                        badges = badges,
+                                        actions = actions,
+                                        onVoice = onVoice
+                                    )
+                                    Screen.SEARCH -> SearchScreen(
+                                        state = state,
+                                        apps = apps,
+                                        repository = model.apps,
+                                        badges = badges,
+                                        permissionSignal = permissionSignal,
+                                        query = query,
+                                        onQuery = { query = it },
+                                        onVoice = onVoice,
+                                        actions = actions
+                                    )
+                                    Screen.FAVORITES -> FavoritesScreen(
+                                        state = state,
+                                        apps = apps,
+                                        repository = model.apps,
+                                        badges = badges,
+                                        usage = usage,
+                                        permissionSignal = permissionSignal,
+                                        actions = actions,
+                                        onVoice = onVoice
+                                    )
+                                    Screen.DESKTOP -> Box(Modifier.fillMaxSize()) {
+                                        Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+                                            PageHeader("Your space", "Desktop", Icons.Rounded.Add, { widgetPicker = true })
+
+                                            // Multi-page desktop pagination header
+                                            val pageCount = state.prefs.desktop.pageCount
+                                            if (pageCount > 1) {
+                                                Row(
+                                                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                                    horizontalArrangement = Arrangement.Center,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    PageIndicators(
+                                                        pageCount = pageCount,
+                                                        currentPage = currentDesktopPage,
+                                                        onSelectPage = { currentDesktopPage = it }
+                                                    )
+                                                }
+                                            }
+
+                                            val pageWidgets = state.widgets.filter { it.page == currentDesktopPage }
+                                            if (pageWidgets.isEmpty() && state.prefs.desktop.hint) {
+                                                EmptyCard(Icons.Rounded.Widgets, "Room for your widgets", "A quiet canvas for calendars, notes, and the things you want to keep in view.", "Add a widget", { widgetPicker = true })
+                                            }
+
+                                            WidgetCanvas(
+                                                controller = widgets,
+                                                prefs = state.prefs.desktop,
+                                                widgets = pageWidgets,
+                                                onChange = { list ->
+                                                    model.store.update { it.copy(widgets = mergeWidgetEdits(it.widgets, pageWidgets, list)) }
+                                                },
+                                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                                onWidgetDeleted = { deleted ->
+                                                    lastDeletedWidget = deleted
+                                                    snackbarMessage = "Widget deleted"
+                                                    snackbarVisible = true
+                                                }
+                                            )
+                                        }
+
+                                        // Centered floating + Add Widget capsule button at the bottom of the canvas
+                                        ExtendedFloatingActionButton(
+                                            onClick = { widgetPicker = true },
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = Ink,
+                                            shape = RoundedCornerShape(24.dp),
+                                            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Add Widget", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        }
                                     }
                                 }
                             }
                         }
+
+                        // Centered bottom page indicators (where inactive dots are translucent white #60FFFFFF and active morphs into elongated solid white capsule)
+                        if (state.prefs.behavior.pageIndicators && manager.current in listOf(Screen.DESKTOP, Screen.HOME, Screen.APPS)) {
+                            val horizontalScreens = listOf(Screen.DESKTOP, Screen.HOME, Screen.APPS)
+                            val currentIdx = horizontalScreens.indexOf(manager.current).coerceAtLeast(0)
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                PageIndicators(
+                                    pageCount = horizontalScreens.size,
+                                    currentPage = currentIdx,
+                                    onSelectPage = { idx -> navigate(horizontalScreens[idx]) }
+                                )
+                            }
+                        }
+
                         if (state.prefs.behavior.borders) WorkspaceNavigation(manager.current, state.prefs.navigation, navigate)
-                        else Spacer(Modifier.height(12.dp))
+                        else Spacer(Modifier.height(8.dp))
                     }
+
+                    // Scalloped Pod Architecture: Dock icons sit inside individual, solid white (#FFFFFF) curved pods
                     val dockShown = state.prefs.dock.enabled && manager.current != Screen.SEARCH && dockAwake && !(scrolling && state.prefs.dock.hideOnScroll)
-                    AnimatedVisibility(visible = dockShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)) {
+                    AnimatedVisibility(
+                        visible = dockShown,
+                        enter = fadeIn() + slideInHorizontally { if (state.prefs.dock.side == "Left") -it else it },
+                        exit = fadeOut() + slideOutHorizontally { if (state.prefs.dock.side == "Left") -it else it },
+                        modifier = Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)
+                    ) {
                         FloatingDock(state, apps, model.apps, badges, actions)
                     }
+
                     if (state.prefs.dock.enabled && !dockShown && manager.current != Screen.SEARCH) {
-                        Box(Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)
-                            .width(16.dp).height(100.dp).clickable { dockWakeSignal++ }.padding(horizontal = 5.dp)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = .55f), RoundedCornerShape(8.dp)))
+                        Box(
+                            Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)
+                                .width(16.dp).height(100.dp).clickable { dockWakeSignal++ }.padding(horizontal = 5.dp)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = .55f), RoundedCornerShape(8.dp))
+                        )
+                    }
+
+                    // Drag and Drop destination capsule
+                    if (dragDestinationCapsule != null) {
+                        Box(Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.TopCenter) {
+                            DestinationCapsule(dragDestinationCapsule!!)
+                        }
+                    }
+
+                    // Bottom Pill Deletion Snackbar with interactive Undo button
+                    Box(Modifier.fillMaxSize().padding(bottom = 24.dp), contentAlignment = Alignment.BottomCenter) {
+                        DeletionSnackbar(
+                            visible = snackbarVisible,
+                            message = snackbarMessage,
+                            onUndo = {
+                                if (lastDeletedWidget != null) {
+                                    model.store.update { it.copy(widgets = it.widgets + lastDeletedWidget!!) }
+                                    lastDeletedWidget = null
+                                }
+                                if (lastDeletedAppKey != null) {
+                                    val (type, list) = lastDeletedAppKey!!
+                                    model.store.update { cur ->
+                                        when (type) {
+                                            "home" -> cur.copy(homeApps = list)
+                                            "dock" -> cur.copy(dockApps = list)
+                                            "favorite" -> cur.copy(favoriteApps = list)
+                                            else -> cur
+                                        }
+                                    }
+                                    lastDeletedAppKey = null
+                                }
+                                snackbarVisible = false
+                            }
+                        )
                     }
                 }
+
                 val currentFolder = folder?.let { selected -> state.folders.find { it.id == selected.id } }
                 if (currentFolder != null) {
                     FolderOverlay(currentFolder, folderFromDock, state, apps, model.apps, actions, { folder = null })
                 }
             }
+
             MaterialTheme(colorScheme = baseScheme) {
             CompositionLocalProvider(LocalContentColor provides baseScheme.onSurface) {
-            if (appMenu != null) AppContextDialog(appMenu!!, state, model.apps, actions,
-                onEdit = { editApp = appMenu; appMenu = null }, onDismiss = { appMenu = null })
-            if (editApp != null) EditAppDialog(editApp!!, state, model.store::update, { editApp = null })
-            if (emptyMenu) AlertDialog(onDismissRequest = { emptyMenu = false }, title = { Text("Make it yours") }, text = {
-                Column {
-                    ActionRow("Change wallpaper", Icons.Rounded.Wallpaper, { emptyMenu = false; SystemActions.wallpaper(activity) })
-                    ActionRow("Add widget", Icons.Rounded.Widgets, { emptyMenu = false; navigate(Screen.DESKTOP); widgetPicker = true })
-                    ActionRow("Settings", Icons.Rounded.Tune, { emptyMenu = false; panel = "settings" })
-                    ActionRow("Manage layout", Icons.Rounded.DashboardCustomize, { emptyMenu = false; panel = "layout" })
-                }
-            }, confirmButton = {})
-            if (widgetPicker) WidgetPicker(widgets, {
-                widgetPicker = false
-                navigate(Screen.DESKTOP)
-                widgets.add(it)
-            }, { widgetPicker = false })
+                if (appMenu != null) AppContextDialog(
+                    app = appMenu!!,
+                    state = state,
+                    repository = model.apps,
+                    actions = actions,
+                    onEdit = { editApp = appMenu; appMenu = null },
+                    onDismiss = { appMenu = null }
+                )
+
+                if (editApp != null) EditAppDialog(
+                    app = editApp!!,
+                    state = state,
+                    update = model.store::update,
+                    onDismiss = { editApp = null }
+                )
+
+                // Empty Space Context Menu: Dark card with Change Wallpaper, Add Widget, Settings, and Manage Layout
+                if (emptyMenu) EmptySpaceMenuDialog(
+                    onWallpaper = { emptyMenu = false; SystemActions.wallpaper(activity) },
+                    onAddWidget = { emptyMenu = false; navigate(Screen.DESKTOP); widgetPicker = true },
+                    onSettings = { emptyMenu = false; panel = "settings" },
+                    onManageLayout = { emptyMenu = false; panel = "layout" },
+                    onDismiss = { emptyMenu = false }
+                )
+
+                // Categorized widget picker
+                if (widgetPicker) WidgetPicker(
+                    controller = widgets,
+                    onSelect = { provider ->
+                        widgetPicker = false
+                        navigate(Screen.DESKTOP)
+                        widgets.add(provider)
+                    },
+                    onDismiss = { widgetPicker = false }
+                )
             }
             }
         }
@@ -357,27 +585,96 @@ private fun WorkspaceNavigation(current: Screen, prefs: NavigationPrefs, navigat
     }
 }
 
+/** Scalloped Pods: Dock icons sit inside individual, solid white (#FFFFFF) curved pods
+ * that extend horizontally from the display edge with an ~8dp vertical gap between pods */
 @Composable
-private fun FloatingDock(state: LauncherState, apps: List<AppEntry>, repository: AppsRepository, badges: Map<String, Int>, actions: WorkspaceActions) {
+private fun FloatingDock(
+    state: LauncherState,
+    apps: List<AppEntry>,
+    repository: AppsRepository,
+    badges: Map<String, Int>,
+    actions: WorkspaceActions
+) {
     val prefs = state.prefs.dock
-    val theme = state.prefs.appearance.dock
+    val isRight = prefs.side == "Right"
     val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }.take(prefs.maxItems)
     val folders = state.dockFolders.mapNotNull { id -> state.folders.find { it.id == id } }.take((prefs.maxItems - entries.size).coerceAtLeast(0))
-    val dockWidth = (48 * prefs.iconScale + 20).dp.coerceAtLeast(64.dp)
-    BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth + 8.dp).windowInsetsPadding(WindowInsets.safeDrawing)) {
-        val estimatedHeight = ((entries.size + folders.size).coerceAtLeast(1) * (48 * prefs.iconScale + 18) + 66 + prefs.padding * 2).dp.coerceAtMost(maxHeight)
-        val top = if (prefs.fullWidth) 12.dp else ((maxHeight - estimatedHeight) * prefs.alignment).coerceAtLeast(0.dp)
-        Surface(modifier = Modifier.padding(start = if (prefs.side == "Left") 8.dp else 0.dp, end = if (prefs.side == "Right") 8.dp else 0.dp)
-            .offset(y = top).width(dockWidth).then(if (prefs.fullWidth) Modifier.fillMaxHeight().padding(vertical = 12.dp) else Modifier),
-            color = surfaceColor(theme, MaterialTheme.colorScheme.primary), contentColor = surfaceContent(theme),
-            shape = RoundedCornerShape(28.dp), border = androidx.compose.foundation.BorderStroke(1.dp, surfaceContent(theme).copy(alpha = .08f)), shadowElevation = 8.dp) {
-            Column(Modifier.heightIn(max = (maxHeight - top - 8.dp).coerceAtLeast(1.dp)).verticalScroll(rememberScrollState()).padding(horizontal = 5.dp, vertical = prefs.padding.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = if (prefs.fullWidth) Arrangement.SpaceEvenly else Arrangement.spacedBy(3.dp)) {
-                val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, spacing = 4)
-                entries.forEach { app -> AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth()) }
-                folders.forEach { item -> FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) }, { actions.manageLayout() }, Modifier.fillMaxWidth()) }
-                if (entries.isNotEmpty() || folders.isNotEmpty()) HorizontalDivider(Modifier.width(25.dp).padding(vertical = 5.dp), color = surfaceContent(theme).copy(alpha = .12f))
-                IconButton(onClick = { actions.navigate(Screen.APPS) }, modifier = Modifier.size(44.dp)) { Icon(Icons.Rounded.Apps, "All applications", tint = surfaceContent(theme), modifier = Modifier.size(23.dp)) }
+    val podWidth = (48 * prefs.iconScale + 18).dp.coerceAtLeast(60.dp)
+    val podShape = if (isRight) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)
+                   else RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)
+
+    BoxWithConstraints(Modifier.fillMaxHeight().width(podWidth + 8.dp).windowInsetsPadding(WindowInsets.safeDrawing)) {
+        val totalItems = entries.size + folders.size + (if (prefs.allApps) 1 else 0)
+        val estimatedHeight = (totalItems.coerceAtLeast(1) * (48 * prefs.iconScale + 18) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
+        val topOffset = if (prefs.fullWidth) 12.dp else ((maxHeight - estimatedHeight) * prefs.alignment).coerceAtLeast(0.dp)
+
+        Column(
+            modifier = Modifier
+                .offset(y = topOffset)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = prefs.padding.dp),
+            horizontalAlignment = if (isRight) Alignment.End else Alignment.Start,
+            verticalArrangement = if (prefs.fullWidth) Arrangement.SpaceEvenly else Arrangement.spacedBy(8.dp) // ~8dp vertical gap between pods
+        ) {
+            val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, spacing = 2)
+
+            if (prefs.allApps && prefs.allAppsLeft) {
+                Surface(
+                    onClick = { actions.navigate(Screen.APPS) },
+                    shape = podShape,
+                    color = Color.White,
+                    contentColor = Ink,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.width(podWidth).height((48 * prefs.iconScale + 12).dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(Icons.Rounded.Apps, "All Applications", tint = Ink, modifier = Modifier.size(24.dp))
+                    }
+                }
+            }
+
+            entries.forEach { app ->
+                Surface(
+                    shape = podShape,
+                    color = Color.White, // Solid white (#FFFFFF) individual curved pod
+                    contentColor = Ink,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.width(podWidth)
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
+                        AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) })
+                    }
+                }
+            }
+
+            folders.forEach { item ->
+                Surface(
+                    shape = podShape,
+                    color = Color.White,
+                    contentColor = Ink,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.width(podWidth)
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
+                        FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) }, { actions.manageLayout() })
+                    }
+                }
+            }
+
+            if (prefs.allApps && !prefs.allAppsLeft) {
+                Surface(
+                    onClick = { actions.navigate(Screen.APPS) },
+                    shape = podShape,
+                    color = Color.White,
+                    contentColor = Ink,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.width(podWidth).height((48 * prefs.iconScale + 12).dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(Icons.Rounded.Apps, "All Applications", tint = Ink, modifier = Modifier.size(24.dp))
+                    }
+                }
             }
         }
     }

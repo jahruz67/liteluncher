@@ -8,47 +8,40 @@ import android.view.View
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.TextView
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import dev.liteluncher.data.DesktopPrefs
 import dev.liteluncher.data.WidgetItem
 import kotlin.math.roundToInt
+
+private val CyanHandle = Color(0xFF00E5FF)
 
 @Composable
 fun WidgetCanvas(
@@ -56,7 +49,8 @@ fun WidgetCanvas(
     prefs: DesktopPrefs,
     widgets: List<WidgetItem>,
     onChange: (List<WidgetItem>) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onWidgetDeleted: ((WidgetItem) -> Unit)? = null
 ) {
     val columns = prefs.columns.coerceIn(1, 24)
     val rows = prefs.rows.coerceIn(1, 32)
@@ -67,10 +61,9 @@ fun WidgetCanvas(
     }
     val currentChange by rememberUpdatedState(onChange)
     val refreshes by controller.refreshes.collectAsState()
-    var editing by rememberSaveable { mutableStateOf<Int?>(null) }
+    var contextMenuWidget by rememberSaveable { mutableStateOf<Int?>(null) }
+    var resizingWidgetId by rememberSaveable { mutableStateOf<Int?>(null) }
 
-    // Changing the desktop grid can invalidate old coordinates. Repack without overlap;
-    // widgets that cannot fit remain saved and get explicit recovery/removal controls.
     LaunchedEffect(widgets, arranged) {
         if (arranged != widgets) currentChange(arranged)
     }
@@ -81,7 +74,7 @@ fun WidgetCanvas(
                 Text("Some widgets do not fit this grid. Increase the grid or free space.",
                     style = MaterialTheme.typography.bodySmall)
                 layout.overflow.forEach { item ->
-                    TextButton(onClick = { editing = item.id }) { Text("Manage widget ${item.id}") }
+                    TextButton(onClick = { contextMenuWidget = item.id }) { Text("Manage widget ${item.id}") }
                 }
             }
         }
@@ -91,125 +84,287 @@ fun WidgetCanvas(
             val cellWidth = canvasWidth / columns
             val cellHeight = canvasHeight / rows
             val gutter = 2.dp
+
             SideEffect {
                 controller.syncLayout(prefs, arranged, canvasWidth.value, canvasHeight.value)
             }
+
             if (widgets.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Add widgets from the widget picker.", style = MaterialTheme.typography.bodyMedium)
                 }
             }
+
             layout.placed.forEach { item ->
                 key(item.id, refreshes[item.id] ?: 0) {
-                    val width = (cellWidth * item.columns - gutter * 2).coerceAtLeast(1.dp)
-                    val height = (cellHeight * item.rows - gutter * 2).coerceAtLeast(1.dp)
-                    val onEdit = { editing = item.id }
-                    val radius = prefs.cornerRadius.coerceIn(0, 96).dp
-                    AndroidView(
-                        factory = { context -> HostedWidgetFrame(context, controller, item.id, onEdit) },
+                    val isResizing = resizingWidgetId == item.id
+                    val itemWidth = (cellWidth * item.columns - gutter * 2).coerceAtLeast(1.dp)
+                    val itemHeight = (cellHeight * item.rows - gutter * 2).coerceAtLeast(1.dp)
+                    val onEdit = { contextMenuWidget = item.id }
+                    val radius = (if (prefs.rounded) prefs.cornerRadius.coerceIn(0, 96) else 0).dp
+
+                    Box(
                         modifier = Modifier
                             .offset(cellWidth * item.column + gutter, cellHeight * item.row + gutter)
-                            .width(width).height(height)
-                            .clip(RoundedCornerShape(radius))
-                            .semantics {
-                                customActions = listOf(CustomAccessibilityAction("Edit widget") {
-                                    editing = item.id
-                                    true
-                                })
-                            },
-                        onRelease = { it.release() },
-                        onReset = null,
-                        update = { frame ->
-                            frame.updateSize(width.value.roundToInt().coerceAtLeast(1),
-                                height.value.roundToInt().coerceAtLeast(1), radius.value, onEdit)
+                            .width(itemWidth).height(itemHeight)
+                    ) {
+                        AndroidView(
+                            factory = { context -> HostedWidgetFrame(context, controller, item.id, onEdit) },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(radius))
+                                .then(if (isResizing) Modifier.border(BorderStroke(2.dp, CyanHandle), RoundedCornerShape(radius)) else Modifier)
+                                .semantics {
+                                    customActions = listOf(CustomAccessibilityAction("Edit widget") {
+                                        contextMenuWidget = item.id
+                                        true
+                                    })
+                                },
+                            onRelease = { it.release() },
+                            onReset = null,
+                            update = { frame ->
+                                frame.updateSize(itemWidth.value.roundToInt().coerceAtLeast(1),
+                                    itemHeight.value.roundToInt().coerceAtLeast(1), radius.value, onEdit)
+                            }
+                        )
+
+                        // 4 Cyan border pill handles when resizing with snap-to-grid internal reflow
+                        if (isResizing) {
+                            val provider = controller.provider(item.id)
+                            val minSpan = provider?.let(controller::minimumSpan) ?: (1 to 1)
+                            val maxSpan = provider?.let(controller::maximumSpan) ?: (columns to rows)
+
+                            // Top Handle (pill width 36dp, height 6dp)
+                            Box(
+                                Modifier
+                                    .align(Alignment.TopCenter)
+                                    .offset(y = (-4).dp)
+                                    .size(36.dp, 8.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(CyanHandle)
+                                    .pointerInput(item.id) {
+                                        var accY = 0f
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            accY += dragAmount.y
+                                            val cellPx = cellHeight.toPx()
+                                            if (kotlin.math.abs(accY) >= cellPx * 0.5f) {
+                                                val step = if (accY < 0) 1 else -1
+                                                val newRow = (item.row - step).coerceIn(0, rows - 1)
+                                                val newRows = (item.rows + step).coerceIn(minSpan.second, maxSpan.second)
+                                                if (newRow >= 0 && newRow + newRows <= rows) {
+                                                    val candidate = item.copy(row = newRow, rows = newRows)
+                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
+                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
+                                                    }
+                                                }
+                                                accY = 0f
+                                            }
+                                        }
+                                    }
+                            )
+
+                            // Bottom Handle
+                            Box(
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .offset(y = 4.dp)
+                                    .size(36.dp, 8.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(CyanHandle)
+                                    .pointerInput(item.id) {
+                                        var accY = 0f
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            accY += dragAmount.y
+                                            val cellPx = cellHeight.toPx()
+                                            if (kotlin.math.abs(accY) >= cellPx * 0.5f) {
+                                                val step = if (accY > 0) 1 else -1
+                                                val newRows = (item.rows + step).coerceIn(minSpan.second, maxSpan.second)
+                                                if (item.row + newRows <= rows) {
+                                                    val candidate = item.copy(rows = newRows)
+                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
+                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
+                                                    }
+                                                }
+                                                accY = 0f
+                                            }
+                                        }
+                                    }
+                            )
+
+                            // Left Handle
+                            Box(
+                                Modifier
+                                    .align(Alignment.CenterStart)
+                                    .offset(x = (-4).dp)
+                                    .size(8.dp, 36.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(CyanHandle)
+                                    .pointerInput(item.id) {
+                                        var accX = 0f
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            accX += dragAmount.x
+                                            val cellPx = cellWidth.toPx()
+                                            if (kotlin.math.abs(accX) >= cellPx * 0.5f) {
+                                                val step = if (accX < 0) 1 else -1
+                                                val newCol = (item.column - step).coerceIn(0, columns - 1)
+                                                val newCols = (item.columns + step).coerceIn(minSpan.first, maxSpan.first)
+                                                if (newCol >= 0 && newCol + newCols <= columns) {
+                                                    val candidate = item.copy(column = newCol, columns = newCols)
+                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
+                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
+                                                    }
+                                                }
+                                                accX = 0f
+                                            }
+                                        }
+                                    }
+                            )
+
+                            // Right Handle
+                            Box(
+                                Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .offset(x = 4.dp)
+                                    .size(8.dp, 36.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(CyanHandle)
+                                    .pointerInput(item.id) {
+                                        var accX = 0f
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            accX += dragAmount.x
+                                            val cellPx = cellWidth.toPx()
+                                            if (kotlin.math.abs(accX) >= cellPx * 0.5f) {
+                                                val step = if (accX > 0) 1 else -1
+                                                val newCols = (item.columns + step).coerceIn(minSpan.first, maxSpan.first)
+                                                if (item.column + newCols <= columns) {
+                                                    val candidate = item.copy(columns = newCols)
+                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
+                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
+                                                    }
+                                                }
+                                                accX = 0f
+                                            }
+                                        }
+                                    }
+                            )
+
+                            // Done button for resize
+                            IconButton(
+                                onClick = { resizingWidgetId = null },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(4.dp, (-14).dp)
+                                    .size(24.dp)
+                                    .background(CyanHandle, CircleShape)
+                            ) {
+                                Icon(Icons.Rounded.Check, "Done resizing", tint = Color.Black, modifier = Modifier.size(16.dp))
+                            }
                         }
-                    )
+                    }
                 }
             }
         }
     }
 
-    val selected = arranged.firstOrNull { it.id == editing }
-    if (selected != null) {
-        WidgetEditor(controller, selected, layout.placed, columns, rows,
-            onDismiss = { editing = null },
-            onReplace = { updated -> currentChange(arranged.map { if (it.id == updated.id) updated else it }) },
+    // Long-Press Context Card: Resize, Refresh, Remove
+    val selectedItem = arranged.firstOrNull { it.id == contextMenuWidget }
+    if (selectedItem != null) {
+        WidgetContextMenuDialog(
+            item = selectedItem,
+            onResize = {
+                resizingWidgetId = selectedItem.id
+                contextMenuWidget = null
+            },
+            onRefresh = {
+                controller.refresh(selectedItem.id)
+                contextMenuWidget = null
+            },
             onRemove = {
-                currentChange(arranged.filterNot { it.id == selected.id })
-                controller.remove(selected.id)
-                editing = null
-            })
+                currentChange(arranged.filterNot { it.id == selectedItem.id })
+                controller.remove(selectedItem.id)
+                onWidgetDeleted?.invoke(selectedItem)
+                contextMenuWidget = null
+            },
+            onDismiss = { contextMenuWidget = null }
+        )
     }
 }
 
 @Composable
-private fun WidgetEditor(
-    controller: WidgetController,
+private fun WidgetContextMenuDialog(
     item: WidgetItem,
-    placed: List<WidgetItem>,
-    columns: Int,
-    rows: Int,
-    onDismiss: () -> Unit,
-    onReplace: (WidgetItem) -> Unit,
-    onRemove: () -> Unit
+    onResize: () -> Unit,
+    onRefresh: () -> Unit,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit
 ) {
-    val provider = controller.provider(item.id)
-    val minimum = provider?.let(controller::minimumSpan) ?: (1 to 1)
-    val maximum = provider?.let(controller::maximumSpan) ?: (columns to rows)
-    val horizontal = provider != null && provider.resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL != 0
-    val vertical = provider != null && provider.resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL != 0
-    fun fits(candidate: WidgetItem) = WidgetGrid.fits(candidate, placed, columns, rows)
-    val left = item.copy(column = item.column - 1)
-    val right = item.copy(column = item.column + 1)
-    val up = item.copy(row = item.row - 1)
-    val down = item.copy(row = item.row + 1)
-    val narrower = item.copy(columns = item.columns - 1)
-    val wider = item.copy(columns = item.columns + 1)
-    val shorter = item.copy(rows = item.rows - 1)
-    val taller = item.copy(rows = item.rows + 1)
-    val recovery = WidgetGrid.place(item, placed, columns, rows)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit widget") },
-        text = {
-            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${item.columns} x ${item.rows} - Column ${item.column + 1}, row ${item.row + 1}")
-                Text("Move", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    TextButton(onClick = { onReplace(left) }, enabled = fits(left)) { Text("Left") }
-                    TextButton(onClick = { onReplace(right) }, enabled = fits(right)) { Text("Right") }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFF282828),
+            contentColor = Color.White,
+            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+            modifier = Modifier.width(260.dp)
+        ) {
+            Column(Modifier.padding(vertical = 8.dp)) {
+                Text(
+                    text = "Widget options",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = Color(0xFFC1F17C)
+                )
+                HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.5.dp)
+
+                // Resize
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onResize)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.AspectRatio, null, tint = CyanHandle, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("Resize", fontSize = 14.sp)
                 }
-                Row {
-                    TextButton(onClick = { onReplace(up) }, enabled = fits(up)) { Text("Up") }
-                    TextButton(onClick = { onReplace(down) }, enabled = fits(down)) { Text("Down") }
+
+                HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
+
+                // Refresh
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onRefresh)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.Refresh, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("Refresh", fontSize = 14.sp)
                 }
-                if (placed.none { it.id == item.id } && recovery != null) {
-                    TextButton(onClick = { onReplace(recovery) }) { Text("Place in free space") }
+
+                HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
+
+                // Remove
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onRemove)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.DeleteOutline, null, tint = Color(0xFFFF5252), modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("Remove", fontSize = 14.sp, color = Color(0xFFFF5252))
                 }
-                Text("Resize", style = MaterialTheme.typography.labelLarge)
-                Row {
-                    TextButton(onClick = { onReplace(narrower) }, enabled = horizontal &&
-                        narrower.columns >= minimum.first && fits(narrower)) { Text("Narrower") }
-                    TextButton(onClick = { onReplace(wider) }, enabled = horizontal &&
-                        wider.columns <= maximum.first && fits(wider)) { Text("Wider") }
-                }
-                Row {
-                    TextButton(onClick = { onReplace(shorter) }, enabled = vertical &&
-                        shorter.rows >= minimum.second && fits(shorter)) { Text("Shorter") }
-                    TextButton(onClick = { onReplace(taller) }, enabled = vertical &&
-                        taller.rows <= maximum.second && fits(taller)) { Text("Taller") }
-                }
-                if (!horizontal && !vertical) Text("The provider uses a fixed widget size.",
-                    style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { controller.refresh(item.id) }, enabled = provider != null) { Text("Refresh") }
-                TextButton(onClick = onRemove) { Text("Remove widget", color = MaterialTheme.colorScheme.error) }
-                if (provider == null) Text("The provider is unavailable. Unlock its profile or remove this widget.",
-                    style = MaterialTheme.typography.bodySmall)
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
-    )
+        }
+    }
 }
 
 private class HostedWidgetFrame(

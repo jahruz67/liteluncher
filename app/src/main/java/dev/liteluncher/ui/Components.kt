@@ -3,10 +3,16 @@
 package dev.liteluncher.ui
 
 import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +48,7 @@ fun iconShape(shape: IconShape): Shape = when (shape) {
     IconShape.CIRCLE -> CircleShape
     IconShape.SQUIRCLE -> RoundedCornerShape(32)
     IconShape.ROUNDED_SQUARE -> RoundedCornerShape(22)
+    IconShape.TEARDROP -> RoundedCornerShape(topStartPercent = 50, topEndPercent = 50, bottomEndPercent = 12, bottomStartPercent = 50)
     IconShape.ORIGINAL -> RoundedCornerShape(0)
 }
 
@@ -66,7 +73,7 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
             custom ?: runCatching { repository.icon(app, pack)?.toBitmap(144, 144) }.getOrNull()
         }
     }
-    val shape = iconShape(state.prefs.appearance.iconShape)
+    val shape = iconShape(override?.shape ?: state.prefs.appearance.iconShape)
     Box(modifier.size(size.dp).clip(shape), contentAlignment = Alignment.Center) {
         if (bitmap != null) Image(bitmap!!.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         else Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {
@@ -82,6 +89,7 @@ fun AppTile(
 ) {
     val label = state.overrides[app.key]?.label?.takeIf { it.isNotBlank() } ?: app.label
     val iconSize = (48 * prefs.iconScale).toInt()
+    val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
     Column(modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick)
         .padding(vertical = 8.dp, horizontal = 2.dp).semantics { contentDescription = label }, horizontalAlignment = Alignment.CenterHorizontally) {
         Box {
@@ -96,7 +104,7 @@ fun AppTile(
         }
         if (prefs.labels) {
             Spacer(Modifier.height(9.dp))
-            Text(label, color = LocalContentColor.current, fontSize = 11.sp, lineHeight = 15.sp,
+            Text(label, color = LocalContentColor.current, fontSize = (11 * textScale).sp, lineHeight = (15 * textScale).sp,
                 textAlign = TextAlign.Center, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -108,7 +116,9 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
     Column(modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         val size = (48 * prefs.iconScale).dp
         val folderColor = parseColor(state.prefs.folders.color)
-        Box(Modifier.size(size).clip(iconShape(state.prefs.appearance.iconShape))
+        val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
+        val shape = iconShape(folder.shape ?: state.prefs.folders.shape)
+        Box(Modifier.size(size).clip(shape)
             .background(folderColor.copy(alpha = folderColor.alpha * state.prefs.folders.opacity)), contentAlignment = Alignment.Center) {
             val members = folder.apps.mapNotNull { key -> apps.find { it.key == key } }.take(4)
             if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = Lime)
@@ -124,7 +134,125 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
         }
         if (prefs.labels) {
             Spacer(Modifier.height(9.dp))
-            Text(folder.name, fontSize = 11.sp, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            Text(folder.name, fontSize = (11 * textScale).sp, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+fun SearchEngineLogo(engine: WebEngine, modifier: Modifier = Modifier) {
+    val (bg, label, textColor) = when (engine) {
+        WebEngine.GOOGLE -> Triple(Color(0xFF4285F4), "G", Color.White)
+        WebEngine.BING -> Triple(Color(0xFF008373), "b", Color.White)
+        WebEngine.DUCKDUCKGO -> Triple(Color(0xFFDE5833), "D", Color.White)
+        WebEngine.YAHOO -> Triple(Color(0xFF6001D2), "Y!", Color.White)
+        WebEngine.WIKIPEDIA -> Triple(Color(0xFF333333), "W", Color.White)
+        WebEngine.BAIDU -> Triple(Color(0xFF2319DC), "度", Color.White)
+        WebEngine.ECOSIA -> Triple(Color(0xFF28A745), "E", Color.White)
+        WebEngine.NAVER -> Triple(Color(0xFF03C75A), "N", Color.White)
+        WebEngine.QWANT -> Triple(Color(0xFF5C24E5), "Q", Color.White)
+        WebEngine.STARTPAGE -> Triple(Color(0xFF1B3D8A), "SP", Color.White)
+        WebEngine.BRAVE -> Triple(Color(0xFFFF3300), "B", Color.White)
+        WebEngine.CUSTOM -> Triple(Color(0xFF4A4A4A), "URL", Color.White)
+    }
+    Surface(
+        modifier = modifier.size(26.dp),
+        shape = RoundedCornerShape(7.dp),
+        color = bg
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                color = textColor,
+                fontSize = if (label.length > 2) 8.sp else 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun DeletionSnackbar(
+    visible: Boolean,
+    message: String = "Entry deleted",
+    onUndo: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + slideInVertically { it },
+        exit = fadeOut() + slideOutVertically { it },
+        modifier = modifier
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFF1E1E1E),
+            contentColor = Color.White,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, Color(0x22FFFFFF))
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(message, fontSize = 13.sp, color = Color.White)
+                Spacer(Modifier.width(16.dp))
+                Text(
+                    "Undo",
+                    color = Lime,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable(onClick = onUndo)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PageIndicators(
+    pageCount: Int,
+    currentPage: Int,
+    modifier: Modifier = Modifier,
+    onSelectPage: ((Int) -> Unit)? = null
+) {
+    Row(
+        modifier = modifier.padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(pageCount) { index ->
+            val isActive = index == currentPage
+            val width = if (isActive) 18.dp else 6.dp
+            val color = if (isActive) Color.White else Color(0x60FFFFFF)
+            Box(
+                Modifier
+                    .width(width)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(color)
+                    .then(if (onSelectPage != null) Modifier.clickable { onSelectPage(index) } else Modifier)
+            )
+        }
+    }
+}
+
+@Composable
+fun DestinationCapsule(destination: String, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0xCC000000),
+        contentColor = Color.White,
+        border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Rounded.DriveFileMove, null, tint = Lime, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(destination, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

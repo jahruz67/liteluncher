@@ -52,6 +52,9 @@ object SearchEngine {
             WebEngine.WIKIPEDIA -> "https://en.wikipedia.org/w/index.php?search={query}"
             WebEngine.BAIDU -> "https://www.baidu.com/s?wd={query}"
             WebEngine.ECOSIA -> "https://www.ecosia.org/search?q={query}"
+            WebEngine.NAVER -> "https://search.naver.com/search.naver?query={query}"
+            WebEngine.QWANT -> "https://www.qwant.com/?q={query}"
+            WebEngine.BRAVE -> "https://search.brave.com/search?q={query}"
             WebEngine.STARTPAGE -> "https://www.startpage.com/sp/search?query={query}"
             WebEngine.CUSTOM -> validCustomUrl(prefs.customUrl) ?: DEFAULT_CUSTOM_URL
         }

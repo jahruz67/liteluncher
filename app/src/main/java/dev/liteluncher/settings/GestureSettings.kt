@@ -100,102 +100,96 @@ private fun GestureBindingDialog(
     onDismiss: () -> Unit,
     onSave: (GestureBinding) -> Unit
 ) {
-    var actionName by rememberSaveable(gesture.name) { mutableStateOf(binding.action.name) }
-    var target by rememberSaveable(gesture.name) { mutableStateOf(binding.target) }
-    var shortcutId by rememberSaveable(gesture.name) { mutableStateOf(binding.shortcutId) }
-    var pickingApp by rememberSaveable { mutableStateOf(false) }
-    val action = Action.valueOf(actionName)
-    val selectedApp = apps.firstOrNull { it.key == target }
-    val needsApp = action == Action.APP || action == Action.SHORTCUT
-    val context = LocalContext.current
-    val launcher = remember(context) { context.getSystemService(LauncherApps::class.java) }
-    val shortcuts by produceState<List<ShortcutInfo>>(emptyList(), selectedApp?.key, action) {
-        value = if (action == Action.SHORTCUT && selectedApp != null) withContext(Dispatchers.IO) {
-            runCatching {
-                if (launcher?.hasShortcutHostPermission() != true) emptyList() else launcher.getShortcuts(
-                    LauncherApps.ShortcutQuery().apply {
-                        setPackage(selectedApp.packageName)
-                        setActivity(selectedApp.component)
-                        setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
-                    }, selectedApp.user
-                ).orEmpty().filter { it.isEnabled }
-            }.getOrDefault(emptyList())
-        } else emptyList()
-    }
-    val valid = (!needsApp || selectedApp != null) && (action != Action.SHORTCUT || shortcuts.any { it.id == shortcutId })
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(gesture.gestureLabel()) },
-        text = {
-            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                val directional = gesture in setOf(Gesture.SWIPE_UP, Gesture.SWIPE_DOWN, Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT, Gesture.TWO_UP, Gesture.TWO_DOWN, Gesture.TWO_LEFT, Gesture.TWO_RIGHT)
-                ChoiceSetting("Action", action, Action.entries.filter { directional || it != Action.NAVIGATE }.map { it to it.actionLabel() }) {
-                    actionName = it.name
+    var action by rememberSaveable { mutableStateOf(binding.action) }
+    var target by rememberSaveable { mutableStateOf(binding.target) }
+    var shortcutId by rememberSaveable { mutableStateOf(binding.shortcutId) }
+    var choosingApp by rememberSaveable { mutableStateOf(false) }
+    var choosingShortcut by rememberSaveable { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(20.dp), color = SettingsPanel,
+            modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(gesture.gestureLabel(), style = MaterialTheme.typography.titleMedium)
+                Action.entries.forEach { option ->
+                    Row(Modifier.fillMaxWidth().clickable {
+                        action = option
+                        if (option != Action.APP && option != Action.SHORTCUT) {
+                            target = ""
+                            shortcutId = ""
+                        }
+                    }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = action == option, onClick = {
+                            action = option
+                            if (option != Action.APP && option != Action.SHORTCUT) {
+                                target = ""
+                                shortcutId = ""
+                            }
+                        })
+                        Text(option.actionLabel(), modifier = Modifier.weight(1f))
+                    }
                 }
-                if (needsApp) {
-                    SettingsLink("App", selectedApp?.label
-                        ?: "Choose an installed app") { pickingApp = true }
-                    if (apps.isEmpty()) SettingsNote("No launchable apps are currently available. Unlock the app's profile and try again.")
+                if (action == Action.APP) {
+                    val label = apps.firstOrNull { it.key == target }?.label ?: "Choose an app"
+                    Button(onClick = { choosingApp = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(label)
+                    }
                 }
                 if (action == Action.SHORTCUT) {
-                    if (shortcuts.isNotEmpty()) ChoiceSetting("App shortcut", shortcutId,
-                        shortcuts.map { it.id to (it.shortLabel?.toString() ?: it.id) }) { shortcutId = it }
-                    else SettingsNote("This app has no available shortcuts. Set Lite Luncher as your default home app to allow shortcut access, then choose an app that publishes shortcuts.")
+                    val label = apps.firstOrNull { it.key == target }?.label ?: "Choose an app for shortcuts"
+                    Button(onClick = { choosingShortcut = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (shortcutId.isBlank()) label else "$label · Shortcut selected")
+                    }
                 }
-                if (action == Action.NONE) SettingsNote("This gesture is disabled. Choose directional navigation to move between screens.")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    TextButton(onClick = {
+                        val valid = when (action) {
+                            Action.APP -> target.isNotBlank()
+                            Action.SHORTCUT -> target.isNotBlank() && shortcutId.isNotBlank()
+                            else -> true
+                        }
+                        if (valid) onSave(GestureBinding(action, target, shortcutId))
+                    }) { Text("Save") }
+                }
             }
-        },
-        confirmButton = {
-            Button(onClick = {
-                val pinned = if (action == Action.SHORTCUT && selectedApp != null) runCatching {
-                    val previous = launcher?.getShortcuts(LauncherApps.ShortcutQuery().apply {
-                        setPackage(selectedApp.packageName)
-                        setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
-                    }, selectedApp.user).orEmpty().map { it.id }
-                    requireNotNull(launcher).pinShortcuts(selectedApp.packageName, (previous + shortcutId).distinct(), selectedApp.user)
-                    true
-                }.getOrDefault(false) else true
-                if (!pinned) android.widget.Toast.makeText(context, "This shortcut could not be pinned. Set Lite Luncher as your default home app.", android.widget.Toast.LENGTH_LONG).show()
-                if (valid && pinned) onSave(GestureBinding(
-                    action = action,
-                    target = if (needsApp) target else "",
-                    shortcutId = if (action == Action.SHORTCUT) shortcutId.trim() else ""
-                ))
-            }, enabled = valid) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-    if (pickingApp) {
-        AppChoiceDialog(apps, target, onDismiss = { pickingApp = false }) {
-            target = it.key
-            pickingApp = false
+        }
+    }
+
+    if (choosingApp) {
+        AppChooserDialog(apps, target, onDismiss = { choosingApp = false }) { selected ->
+            target = selected.key
+            shortcutId = ""
+            choosingApp = false
+        }
+    }
+    if (choosingShortcut) {
+        AppShortcutChooserDialog(apps, target, onDismiss = { choosingShortcut = false }) { app, shortcut ->
+            target = app.key
+            shortcutId = shortcut
+            choosingShortcut = false
         }
     }
 }
 
 @Composable
-private fun AppChoiceDialog(
+private fun AppChooserDialog(
     apps: List<AppEntry>,
     selectedKey: String,
     onDismiss: () -> Unit,
     onSelect: (AppEntry) -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    val filtered = remember(apps, query) {
-        apps.distinctBy { it.key }.filter {
-            query.isBlank() || it.label.contains(query, true) || it.packageName.contains(query, true)
-        }.sortedBy { it.label.lowercase(Locale.ROOT) }
-    }
+    val filtered = apps.filter { query.isBlank() || it.label.contains(query, ignoreCase = true) }
+        .sortedBy { it.label.lowercase(Locale.ROOT) }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(24.dp), color = SettingsPanel,
-            modifier = Modifier.fillMaxWidth().fillMaxHeight(.85f)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Choose app", style = MaterialTheme.typography.titleLarge)
+        Surface(shape = RoundedCornerShape(20.dp), color = SettingsPanel,
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(.8f)) {
+            Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(),
                     label = { Text("Filter apps") }, singleLine = true)
-                LazyColumn(Modifier.weight(1f)) {
-                    if (filtered.isEmpty()) item { SettingsNote("No matching apps.") }
+                LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
                     items(filtered, key = { it.key }) { app ->
                         Row(Modifier.fillMaxWidth().clickable { onSelect(app) }.padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically) {
@@ -215,23 +209,77 @@ private fun AppChoiceDialog(
     }
 }
 
+@Composable
+private fun AppShortcutChooserDialog(
+    apps: List<AppEntry>,
+    selectedAppKey: String,
+    onDismiss: () -> Unit,
+    onSelect: (AppEntry, String) -> Unit
+) {
+    var pickedApp by remember { mutableStateOf(apps.firstOrNull { it.key == selectedAppKey }) }
+    val context = LocalContext.current
+    val shortcuts by produceState<List<ShortcutInfo>>(emptyList(), pickedApp) {
+        value = withContext(Dispatchers.IO) {
+            val app = pickedApp ?: return@withContext emptyList()
+            val launcher = context.getSystemService(LauncherApps::class.java) ?: return@withContext emptyList()
+            runCatching {
+                val query = LauncherApps.ShortcutQuery().apply {
+                    setPackage(app.packageName)
+                    setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+                }
+                launcher.getShortcuts(query, app.user).orEmpty()
+            }.getOrDefault(emptyList())
+        }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(20.dp), color = SettingsPanel,
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(.8f)) {
+            Column(Modifier.padding(16.dp)) {
+                if (pickedApp == null) {
+                    Text("Choose an app", style = MaterialTheme.typography.titleMedium)
+                    LazyColumn(Modifier.weight(1f)) {
+                        items(apps.sortedBy { it.label.lowercase(Locale.ROOT) }, key = { it.key }) { app ->
+                            Text(app.label, modifier = Modifier.fillMaxWidth().clickable { pickedApp = app }.padding(vertical = 10.dp))
+                        }
+                    }
+                } else {
+                    Text(pickedApp!!.label, style = MaterialTheme.typography.titleMedium)
+                    if (shortcuts.isEmpty()) {
+                        Text("No shortcuts available for this app.", modifier = Modifier.padding(vertical = 16.dp))
+                    } else {
+                        LazyColumn(Modifier.weight(1f)) {
+                            items(shortcuts, key = { it.id }) { shortcut ->
+                                Text(shortcut.shortLabel?.toString() ?: shortcut.id,
+                                    modifier = Modifier.fillMaxWidth().clickable { onSelect(pickedApp!!, shortcut.id) }.padding(vertical = 10.dp))
+                            }
+                        }
+                    }
+                    TextButton(onClick = { pickedApp = null }) { Text("Choose another app") }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Cancel") }
+            }
+        }
+    }
+}
+
 private fun Gesture.gestureLabel(): String = when (this) {
-    Gesture.HOME -> "Home button"
-    Gesture.DOUBLE_TAP -> "Double tap"
-    Gesture.SWIPE_UP -> "One finger · swipe up"
-    Gesture.SWIPE_DOWN -> "One finger · swipe down"
-    Gesture.SWIPE_LEFT -> "One finger · swipe left"
-    Gesture.SWIPE_RIGHT -> "One finger · swipe right"
-    Gesture.TWO_UP -> "Two fingers · swipe up"
-    Gesture.TWO_DOWN -> "Two fingers · swipe down"
-    Gesture.TWO_LEFT -> "Two fingers · swipe left"
-    Gesture.TWO_RIGHT -> "Two fingers · swipe right"
-    Gesture.PINCH_IN -> "Pinch in"
-    Gesture.PINCH_OUT -> "Pinch out"
+    Gesture.HOME -> "Home Button"
+    Gesture.DOUBLE_TAP -> "Double Tap"
+    Gesture.SWIPE_DOWN -> "Swipe down"
+    Gesture.SWIPE_UP -> "Swipe up"
+    Gesture.SWIPE_LEFT -> "Swipe left"
+    Gesture.SWIPE_RIGHT -> "Swipe right"
+    Gesture.TWO_DOWN -> "Swipe down (Two Fingers)"
+    Gesture.TWO_UP -> "Swipe up (Two Fingers)"
+    Gesture.TWO_LEFT -> "Swipe left (Two Fingers)"
+    Gesture.TWO_RIGHT -> "Swipe right (Two Fingers)"
+    Gesture.PINCH_IN -> "Zoom in"
+    Gesture.PINCH_OUT -> "Zoom out"
 }
 
 private fun Action.actionLabel(): String = when (this) {
-    Action.NONE -> "No assigned action"
+    Action.NONE -> "Nothing"
+    Action.NOTIFICATIONS -> "Notifications"
     Action.NAVIGATE -> "Directional navigation (swipes)"
     Action.HOME -> "Open Home"
     Action.SEARCH -> "Open Search"

@@ -299,7 +299,7 @@ class LauncherStore(context: Context) {
             val prefs = sanitizePrefs(value.prefs)
             val folders = value.folders.asSequence().mapNotNull { folder ->
                 val id = key(folder.id) ?: return@mapNotNull null
-                FolderItem(id, text(folder.name, 128).ifEmpty { "Folder" }, keys(folder.apps, MAX_APPS))
+                folder.copy(id = id, name = text(folder.name, 128).ifEmpty { "Folder" }, apps = keys(folder.apps, MAX_APPS), iconUri = safeUri(folder.iconUri))
             }.distinctBy { it.id }.take(MAX_FOLDERS).toList()
             val folderIds = folders.map { it.id }.toSet()
             val overrides = linkedMapOf<String, AppOverride>()
@@ -318,7 +318,7 @@ class LauncherStore(context: Context) {
                 .take(MAX_WIDGETS).map { widget ->
                     val column = widget.column.coerceIn(0, MAX_COLUMNS - 1)
                     val row = widget.row.coerceIn(0, MAX_ROWS - 1)
-                    widget.copy(column = column, row = row,
+                    widget.copy(column = column, row = row, page = widget.page.coerceIn(0, prefs.desktop.pageCount - 1),
                         columns = widget.columns.coerceIn(1, MAX_COLUMNS - column),
                         rows = widget.rows.coerceIn(1, MAX_ROWS - row))
                 }.toList()
@@ -337,6 +337,8 @@ class LauncherStore(context: Context) {
                 homeFolders = keys(value.homeFolders, MAX_FOLDERS).filter { it in folderIds },
                 dockFolders = keys(value.dockFolders, MAX_FOLDERS).filter { it in folderIds },
                 widgets = widgets,
+                desktopApps = value.desktopApps.filterKeys { it in 0 until prefs.desktop.pageCount }
+                    .mapValues { keys(it.value, MAX_APPS) },
                 contacts = value.contacts.asSequence().map { safeUri(it, contact = true) }
                     .filter { it.isNotEmpty() }.distinct().take(MAX_CONTACTS).toList(),
                 shortcuts = shortcuts, overrides = overrides, launches = launches,
@@ -351,7 +353,8 @@ class LauncherStore(context: Context) {
                 home = grid(value.home), drawer = grid(value.drawer),
                 clock = value.clock.copy(size = value.clock.size.coerceIn(8, 512),
                     color = color(value.clock.color, defaults.clock.color),
-                    font = text(value.clock.font, 64).ifEmpty { defaults.clock.font }),
+                    font = text(value.clock.font, 64).ifEmpty { defaults.clock.font },
+                    textScale = bounded(value.clock.textScale, .25f, 3f, .85f), clockApp = key(value.clock.clockApp).orEmpty()),
                 dock = value.dock.copy(side = text(value.dock.side, 32).ifEmpty { defaults.dock.side },
                     alignment = bounded(value.dock.alignment, 0f, 1f, defaults.dock.alignment),
                     iconScale = bounded(value.dock.iconScale, .25f, 3f, defaults.dock.iconScale),
@@ -361,20 +364,24 @@ class LauncherStore(context: Context) {
                     fingers = value.navigation.fingers.coerceIn(1, 2),
                     preset = text(value.navigation.preset, 64).ifEmpty { defaults.navigation.preset }),
                 search = value.search.copy(grid = grid(value.search.grid),
+                    barText = text(value.search.barText, 128), targetOrder = (value.search.targetOrder + SearchTarget.entries).distinct(),
                     customUrl = SearchEngine.validCustomUrl(value.search.customUrl) ?: SearchEngine.DEFAULT_CUSTOM_URL),
                 desktop = value.desktop.copy(columns = value.desktop.columns.coerceIn(1, MAX_COLUMNS),
                     rows = value.desktop.rows.coerceIn(1, MAX_ROWS), padding = value.desktop.padding.coerceIn(0, 256),
-                    cornerRadius = value.desktop.cornerRadius.coerceIn(0, 256), grid = grid(value.desktop.grid)),
+                    cornerRadius = value.desktop.cornerRadius.coerceIn(0, 96), pageCount = value.desktop.pageCount.coerceIn(1, 16), grid = grid(value.desktop.grid)),
                 favorites = value.favorites.copy(maxItems = value.favorites.maxItems.coerceIn(1, 512),
-                    grid = grid(value.favorites.grid)),
+                    grid = grid(value.favorites.grid), itemsPerRow = value.favorites.itemsPerRow.coerceIn(0, 10), excluded = keys(value.favorites.excluded, MAX_APPS).toSet()),
                 appearance = value.appearance.copy(dim = bounded(value.appearance.dim, 0f, 1f, defaults.appearance.dim),
                     accent = color(value.appearance.accent, defaults.appearance.accent),
+                    backgroundColor = color(value.appearance.backgroundColor, defaults.appearance.backgroundColor),
+                    statusColor = color(value.appearance.statusColor, "#00000000"), navigationColor = color(value.appearance.navigationColor, "#00000000"),
                     iconPack = value.appearance.iconPack.trim().takeIf { it.length <= 255 && PACKAGE.matches(it) }.orEmpty()),
                 badges = value.badges.copy(color = color(value.badges.color, defaults.badges.color),
                     scale = bounded(value.badges.scale, .25f, 3f, defaults.badges.scale)),
                 folders = value.folders.copy(color = color(value.folders.color, defaults.folders.color),
                     opacity = bounded(value.folders.opacity, 0f, 1f, defaults.folders.opacity),
-                    iconScale = bounded(value.folders.iconScale, .25f, 3f, defaults.folders.iconScale)),
+                    iconScale = bounded(value.folders.iconScale, .25f, 3f, defaults.folders.iconScale),
+                    iconColor = color(value.folders.iconColor, "#A0FFFFFF"), textScale = bounded(value.folders.textScale, .25f, 3f, 1f)),
                 behavior = value.behavior.copy(
                     wallpaperScroll = text(value.behavior.wallpaperScroll, 64).ifEmpty { defaults.behavior.wallpaperScroll },
                     horizontalTransition = text(value.behavior.horizontalTransition, 64)
@@ -391,7 +398,8 @@ class LauncherStore(context: Context) {
         fun grid(value: GridPrefs): GridPrefs = value.copy(
             columns = value.columns.coerceIn(1, MAX_COLUMNS), rows = value.rows.coerceIn(1, MAX_ROWS),
             iconScale = bounded(value.iconScale, .25f, 3f, 1f), padding = value.padding.coerceIn(0, 256),
-            spacing = value.spacing.coerceIn(0, 256)
+            spacing = value.spacing.coerceIn(0, 256), textScale = bounded(value.textScale, .25f, 3f, 1f),
+            intermediateSteps = value.intermediateSteps.coerceIn(0, 4), borderPadding = value.borderPadding.takeIf { it in setOf("Default", "None", "Small", "Large") } ?: "Default"
         )
 
         fun bounded(value: Float, min: Float, max: Float, fallback: Float): Float =

@@ -5,7 +5,7 @@ import dev.liteluncher.data.WidgetItem
 /** All coordinates are zero-based. Failed placements leave persisted widgets recoverable. */
 internal object WidgetGrid {
     fun overlaps(a: WidgetItem, b: WidgetItem): Boolean =
-        a.column < b.column + b.columns && a.column + a.columns > b.column &&
+        a.page == b.page && a.column < b.column + b.columns && a.column + a.columns > b.column &&
             a.row < b.row + b.rows && a.row + a.rows > b.row
 
     fun fits(item: WidgetItem, others: List<WidgetItem>, columns: Int, rows: Int): Boolean =
