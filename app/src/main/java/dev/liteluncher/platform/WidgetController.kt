@@ -1,0 +1,569 @@
+package dev.liteluncher.platform
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetHostView
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
+import android.content.Context
+import android.content.Intent
+import android.content.pm.LauncherApps
+import android.os.Build
+import android.os.Bundle
+import android.os.Process
+import android.os.UserManager
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
+import android.view.ViewConfiguration
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.os.BundleCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import dev.liteluncher.data.DesktopPrefs
+import dev.liteluncher.data.PinnedShortcut
+import dev.liteluncher.data.WidgetItem
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.abs
+import kotlin.math.ceil
+
+/**
+ * Construct exactly once per activity, before STARTED (normally immediately after super.onCreate).
+ * start/stop are also attached to the activity lifecycle. Closing never deletes saved widgets.
+ */
+class WidgetController(
+    private val activity: ComponentActivity,
+    private val onAdded: (WidgetItem) -> Unit
+) : AutoCloseable {
+    private val manager = AppWidgetManager.getInstance(activity)
+    private val users = requireNotNull(activity.getSystemService(UserManager::class.java))
+    private val launcher = requireNotNull(activity.getSystemService(LauncherApps::class.java))
+    private val journal = activity.getSharedPreferences("widget_host_pending", Context.MODE_PRIVATE)
+    private val nativeHost = LauncherWidgetHost(activity, HOST_ID)
+    val host: AppWidgetHost = nativeHost
+    private var pending: Pending? = null
+    private var restored = false
+    private var listening = false
+    private var closed = false
+    private var pinDialog: AlertDialog? = null
+    private var pinConfirmation: LauncherApps.PinItemRequest? = null
+    private var columns = 4
+    private var rows = 8
+    private var cellWidthDp = 80f
+    private var cellHeightDp = 80f
+    private var layoutItems = emptyList<WidgetItem>()
+    private val mutableRefreshes = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    internal val refreshes = mutableRefreshes.asStateFlow()
+
+    private data class Pending(
+        val id: Int,
+        val provider: AppWidgetProviderInfo,
+        val stage: String,
+        val pin: LauncherApps.PinItemRequest? = null
+    )
+
+    private val bindLauncher = activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        restorePending()
+        val current = pending ?: return@registerForActivityResult
+        if (current.stage != BINDING) return@registerForActivityResult
+        val returnedId = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, current.id) ?: current.id
+        if (result.resultCode != Activity.RESULT_OK || returnedId != current.id ||
+            runCatching { manager.getAppWidgetInfo(current.id) }.getOrNull() == null) {
+            cancelPending()
+        } else configureOrFinish()
+    }
+
+    /**
+     * Forward Activity.onActivityResult here; true consumes CONFIGURE_REQUEST_CODE (0x4C49).
+     * Return false to let the activity dispatch other results, including the bind launcher.
+     */
+    fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode != CONFIGURE_REQUEST_CODE) return false
+        if (closed) return true
+        restorePending()
+        val current = pending ?: return true
+        if (current.stage != CONFIGURING) return true
+        val returnedId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, current.id) ?: current.id
+        if (resultCode == Activity.RESULT_OK && returnedId == current.id) finishAdding() else cancelPending()
+        return true
+    }
+
+    private val lifecycleObserver = LifecycleEventObserver { _, event ->
+        when (event) {
+            Lifecycle.Event.ON_CREATE -> restorePending()
+            Lifecycle.Event.ON_START -> start()
+            Lifecycle.Event.ON_STOP -> stop()
+            Lifecycle.Event.ON_DESTROY -> close()
+            else -> Unit
+        }
+    }
+
+    init {
+        check(!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            "Create WidgetController before the activity is STARTED."
+        }
+        activity.savedStateRegistry.registerSavedStateProvider(STATE_KEY) {
+            Bundle().apply {
+                putInt("columns", columns)
+                putInt("rows", rows)
+                putFloat("cellWidth", cellWidthDp)
+                putFloat("cellHeight", cellHeightDp)
+                putIntArray("occupied", layoutItems.flatMap {
+                    listOf(it.id, it.column, it.row, it.columns, it.rows)
+                }.toIntArray())
+                putParcelable("confirmation", pinConfirmation)
+                pending?.let {
+                    putInt("id", it.id)
+                    putParcelable("provider", it.provider)
+                    putString("stage", it.stage)
+                    putParcelable("pin", it.pin)
+                }
+            }
+        }
+        if (activity.savedStateRegistry.isRestored) restorePending()
+        activity.lifecycle.addObserver(lifecycleObserver)
+    }
+
+    // Only the current user's providers are offered; profile availability is checked again
+    // when adding and completing a widget.
+    fun providers(): List<AppWidgetProviderInfo> = runCatching {
+        if (!users.isUserUnlocked(Process.myUserHandle())) return@runCatching emptyList<AppWidgetProviderInfo>()
+        manager.getInstalledProvidersForProfile(Process.myUserHandle()).sortedBy {
+            runCatching { it.loadLabel(activity.packageManager) }.getOrDefault(it.provider.packageName).lowercase()
+        }
+    }.getOrDefault(emptyList())
+
+    fun add(provider: AppWidgetProviderInfo) {
+        beginAdd(provider, null)
+    }
+
+    private fun beginAdd(provider: AppWidgetProviderInfo, pin: LauncherApps.PinItemRequest?) {
+        restorePending()
+        if (closed) return
+        if (pending != null || pinDialog != null) {
+            SystemActions.error(activity, "Finish adding the current widget first.")
+            return
+        }
+        if (provider.profile != Process.myUserHandle() || !profileAvailable(provider)) {
+            SystemActions.error(activity, "Widgets are available only from your unlocked current profile.")
+            return
+        }
+        if (placement(AppWidgetManager.INVALID_APPWIDGET_ID, provider) == null) {
+            SystemActions.error(activity, "There is no free space for this widget. Move or remove a widget first.")
+            return
+        }
+        val id = runCatching { host.allocateAppWidgetId() }.getOrElse {
+            SystemActions.error(activity, "Android could not allocate a widget.")
+            return
+        }
+        if (id <= 0) {
+            SystemActions.error(activity, "This device does not support hosting widgets.")
+            return
+        }
+        pending = Pending(id, provider, BINDING, pin)
+        journal.edit().putInt("id", id).apply()
+        val bound = runCatching {
+            manager.bindAppWidgetIdIfAllowed(id, provider.profile, provider.provider, widgetOptions())
+        }.getOrDefault(false)
+        if (bound) configureOrFinish() else {
+            val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider.provider)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER_PROFILE, provider.profile)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, widgetOptions())
+            if (runCatching { bindLauncher.launch(intent) }.isFailure) {
+                cancelPending()
+                SystemActions.error(activity, "Android's widget binding screen is unavailable.")
+            }
+        }
+    }
+
+    private fun configureOrFinish() {
+        val current = pending ?: return
+        val info = runCatching { manager.getAppWidgetInfo(current.id) }.getOrNull()
+        if (info == null || info.provider != current.provider.provider || info.profile != current.provider.profile) {
+            cancelPending()
+            return
+        }
+        if (info.configure == null) {
+            finishAdding()
+            return
+        }
+        pending = current.copy(provider = info, stage = CONFIGURING)
+        if (runCatching {
+            host.startAppWidgetConfigureActivityForResult(activity, current.id, 0, CONFIGURE_REQUEST_CODE, null)
+        }.isFailure) {
+            cancelPending()
+            SystemActions.error(activity, "This widget's setup activity could not be opened.")
+        }
+    }
+
+    private fun finishAdding() {
+        val current = pending ?: return
+        val info = runCatching { manager.getAppWidgetInfo(current.id) }.getOrNull()
+        if (info == null || info.provider != current.provider.provider ||
+            info.profile != current.provider.profile || !profileAvailable(info)) {
+            cancelPending()
+            return
+        }
+        val item = placement(current.id, info)
+        if (item == null) {
+            cancelPending()
+            SystemActions.error(activity, "There is no free grid space for this widget.")
+            return
+        }
+        if (current.pin != null) {
+            val accepted = runCatching {
+                current.pin.isValid && current.pin.accept(Bundle().apply {
+                    putInt(AppWidgetManager.EXTRA_APPWIDGET_ID, current.id)
+                })
+            }.getOrDefault(false)
+            if (!accepted) {
+                cancelPending()
+                SystemActions.error(activity, "The widget pin request expired or was refused.")
+                return
+            }
+        }
+        // The callback owns persistence; keep the id pending until it has been delivered.
+        try {
+            onAdded(item)
+            layoutItems = layoutItems.filterNot { it.id == item.id } + item
+            pending = null
+            journal.edit().remove("id").apply()
+        } catch (error: Exception) {
+            cancelPending()
+            SystemActions.error(activity, "The widget could not be saved.")
+        }
+    }
+
+    private fun widgetOptions() = Bundle().apply {
+        putInt(AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY, AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN)
+    }
+
+    private fun profileAvailable(provider: AppWidgetProviderInfo) = runCatching {
+        users.userProfiles.contains(provider.profile) && users.isUserUnlocked(provider.profile) &&
+            !users.isQuietModeEnabled(provider.profile)
+    }.getOrDefault(false)
+
+    private fun placement(id: Int, info: AppWidgetProviderInfo): WidgetItem? {
+        val density = activity.resources.displayMetrics.density
+        val padding = AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
+        val width = ceil((info.minWidth + padding.left + padding.right) / density / cellWidthDp).toInt().coerceAtLeast(1)
+        val height = ceil((info.minHeight + padding.top + padding.bottom) / density / cellHeightDp).toInt().coerceAtLeast(1)
+        val desiredColumns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && info.targetCellWidth > 0) info.targetCellWidth else width
+        val desiredRows = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && info.targetCellHeight > 0) info.targetCellHeight else height
+        val minimum = minimumSpan(info)
+        if (minimum.first > columns || minimum.second > rows) return null
+        val occupied = WidgetGrid.arrange(layoutItems, columns, rows)
+        if (occupied.overflow.isNotEmpty()) return null
+        val maximum = maximumSpan(info)
+        val maxColumns = desiredColumns.coerceIn(minimum.first, maximum.first)
+        val maxRows = desiredRows.coerceIn(minimum.second, maximum.second)
+        for (rowSpan in maxRows downTo minimum.second) {
+            for (columnSpan in maxColumns downTo minimum.first) {
+                val candidate = WidgetGrid.place(WidgetItem(id, columns = columnSpan, rows = rowSpan),
+                    occupied.placed, columns, rows)
+                if (candidate != null) return candidate
+            }
+        }
+        return null
+    }
+
+    internal fun minimumSpan(info: AppWidgetProviderInfo): Pair<Int, Int> {
+        val density = activity.resources.displayMetrics.density
+        val padding = AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
+        val width = if (info.resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL != 0 && info.minResizeWidth > 0) info.minResizeWidth else info.minWidth
+        val height = if (info.resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL != 0 && info.minResizeHeight > 0) info.minResizeHeight else info.minHeight
+        return ceil((width + padding.left + padding.right) / density / cellWidthDp).toInt().coerceAtLeast(1) to
+            ceil((height + padding.top + padding.bottom) / density / cellHeightDp).toInt().coerceAtLeast(1)
+    }
+
+    internal fun maximumSpan(info: AppWidgetProviderInfo): Pair<Int, Int> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return columns to rows
+        val density = activity.resources.displayMetrics.density
+        val padding = AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
+        val min = minimumSpan(info)
+        val width = if (info.maxResizeWidth > 0) {
+            kotlin.math.floor((info.maxResizeWidth + padding.left + padding.right) / density / cellWidthDp)
+                .toInt().coerceAtLeast(min.first)
+        } else columns
+        val height = if (info.maxResizeHeight > 0) {
+            kotlin.math.floor((info.maxResizeHeight + padding.top + padding.bottom) / density / cellHeightDp)
+                .toInt().coerceAtLeast(min.second)
+        } else rows
+        return width.coerceAtMost(columns) to height.coerceAtMost(rows)
+    }
+
+    /** Seed this when opening a picker before WidgetCanvas has ever been composed. */
+    fun updateLayout(prefs: DesktopPrefs, widgets: List<WidgetItem>) {
+        columns = prefs.columns.coerceIn(1, 24)
+        rows = prefs.rows.coerceIn(1, 32)
+        layoutItems = widgets.distinctBy { it.id }
+    }
+
+    internal fun syncLayout(prefs: DesktopPrefs, items: List<WidgetItem>, widthDp: Float, heightDp: Float) {
+        updateLayout(prefs, items)
+        cellWidthDp = (widthDp / columns).coerceAtLeast(1f)
+        cellHeightDp = (heightDp / rows).coerceAtLeast(1f)
+    }
+
+    internal fun provider(id: Int): AppWidgetProviderInfo? = runCatching {
+        manager.getAppWidgetInfo(id)?.takeIf { profileAvailable(it) }
+    }.getOrNull()
+
+    internal fun createView(context: Context, id: Int, onLongPress: () -> Unit): AppWidgetHostView? {
+        val info = provider(id) ?: return null
+        return runCatching {
+            (host.createView(context, id, info) as LauncherWidgetHostView).apply {
+                edit = onLongPress
+                contentDescription = info.loadLabel(context.packageManager)
+            }
+        }.getOrNull()
+    }
+
+    internal fun refresh(id: Int) {
+        val info = provider(id) ?: return
+        // Recreate the host view to reload Android's most recent RemoteViews, and ask the
+        // provider to refresh its data. Providers may apply their own refresh throttling.
+        mutableRefreshes.value = mutableRefreshes.value + (id to ((mutableRefreshes.value[id] ?: 0) + 1))
+        runCatching {
+            activity.sendBroadcast(Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE)
+                .setComponent(info.provider).putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, intArrayOf(id)))
+        }
+    }
+
+    fun remove(id: Int) {
+        if (pending?.id == id) cancelPending() else runCatching { host.deleteAppWidgetId(id) }
+        layoutItems = layoutItems.filterNot { it.id == id }
+        mutableRefreshes.value = mutableRefreshes.value - id
+    }
+
+    fun start() {
+        restorePending()
+        if (closed || listening) return
+        listening = runCatching { host.startListening(); true }.getOrElse {
+            SystemActions.error(activity, "Android could not start widget updates.")
+            false
+        }
+    }
+
+    fun stop() {
+        if (!listening) return
+        runCatching { host.stopListening() }
+        listening = false
+    }
+
+    /**
+     * Call on every onCreate, including restoration, and for new pin intents. Restored
+     * confirmations use this call's callback; an in-progress widget is never restarted.
+     * True means a recognized request was handled or shown, not that the user accepted it.
+     */
+    fun acceptPin(intent: Intent, onShortcut: (PinnedShortcut) -> Unit): Boolean {
+        restorePending()
+        if (closed) return false
+        val pinIntent = intent.action == LauncherApps.ACTION_CONFIRM_PIN_SHORTCUT ||
+            intent.action == LauncherApps.ACTION_CONFIRM_PIN_APPWIDGET
+        // The activity still holds its original pin intent while Android is binding or
+        // configuring that widget. Replaying it must not create another confirmation.
+        if (pending != null) return pinIntent
+        if (pinDialog != null) return pinIntent || pinConfirmation != null
+        val request = pinConfirmation ?: if (pinIntent) {
+            runCatching { launcher.getPinItemRequest(intent) }.getOrNull()
+        } else null
+        if (request == null) return false
+        if (!runCatching { request.isValid }.getOrDefault(false)) {
+            pinConfirmation = null
+            return false
+        }
+        when (request.requestType) {
+            LauncherApps.PinItemRequest.REQUEST_TYPE_SHORTCUT -> {
+                val shortcut = request.shortcutInfo ?: return false
+                val serial = runCatching {
+                    if (!users.userProfiles.contains(shortcut.userHandle) ||
+                        !users.isUserUnlocked(shortcut.userHandle) || users.isQuietModeEnabled(shortcut.userHandle)) -1L
+                    else users.getSerialNumberForUser(shortcut.userHandle)
+                }.getOrDefault(-1L)
+                if (serial < 0) return false
+                val label = shortcut.shortLabel?.toString() ?: shortcut.id
+                showPinDialog(request, "Add shortcut?", "$label\n${shortcut.`package`}") {
+                    val accepted = runCatching { request.isValid && request.accept() }.getOrDefault(false)
+                    if (accepted) {
+                        runCatching { onShortcut(PinnedShortcut(shortcut.id, shortcut.`package`, label, serial)) }
+                            .onFailure { SystemActions.error(activity, "The shortcut was pinned but could not be saved.") }
+                    } else SystemActions.error(activity, "The shortcut pin request is no longer available.")
+                }
+            }
+            LauncherApps.PinItemRequest.REQUEST_TYPE_APPWIDGET -> {
+                val provider = runCatching { request.getAppWidgetProviderInfo(activity) }.getOrNull() ?: return false
+                if (provider.profile != Process.myUserHandle() || !profileAvailable(provider)) {
+                    SystemActions.error(activity, "This widget is unavailable in the current profile.")
+                    return true
+                }
+                val label = runCatching { provider.loadLabel(activity.packageManager) }.getOrDefault(provider.provider.packageName)
+                showPinDialog(request, "Add widget?", "$label\n${provider.provider.packageName}") {
+                    if (runCatching { request.isValid }.getOrDefault(false)) beginAdd(provider, request)
+                    else SystemActions.error(activity, "The widget pin request expired.")
+                }
+            }
+            else -> return false
+        }
+        return true
+    }
+
+    private fun showPinDialog(request: LauncherApps.PinItemRequest, title: String, label: String, accepted: () -> Unit) {
+        if (activity.isFinishing || activity.isDestroyed) return
+        val dialog = AlertDialog.Builder(activity).setTitle(title).setMessage(label)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton("Add") { _, _ ->
+                pinDialog = null
+                pinConfirmation = null
+                accepted()
+            }.create()
+        dialog.setOnDismissListener {
+            if (pinDialog === dialog) {
+                pinDialog = null
+                pinConfirmation = null
+            }
+        }
+        pinConfirmation = request
+        pinDialog = dialog
+        if (runCatching { dialog.show() }.isFailure) {
+            pinDialog = null
+            pinConfirmation = null
+            SystemActions.error(activity, "The add confirmation could not be displayed.")
+        }
+    }
+
+    private fun restorePending() {
+        if (restored || !activity.savedStateRegistry.isRestored) return
+        restored = true
+        val bundle = activity.savedStateRegistry.consumeRestoredStateForKey(STATE_KEY)
+        if (bundle != null) {
+            columns = bundle.getInt("columns", columns).coerceIn(1, 24)
+            rows = bundle.getInt("rows", rows).coerceIn(1, 32)
+            cellWidthDp = bundle.getFloat("cellWidth", cellWidthDp).takeIf { it.isFinite() && it > 0 } ?: 80f
+            cellHeightDp = bundle.getFloat("cellHeight", cellHeightDp).takeIf { it.isFinite() && it > 0 } ?: 80f
+            val occupied = bundle.getIntArray("occupied") ?: intArrayOf()
+            layoutItems = (0 until occupied.size / 5).map { index ->
+                val offset = index * 5
+                WidgetItem(occupied[offset], occupied[offset + 1], occupied[offset + 2],
+                    occupied[offset + 3], occupied[offset + 4])
+            }.filter { it.id > 0 }.distinctBy { it.id }
+        }
+        val id = bundle?.getInt("id", AppWidgetManager.INVALID_APPWIDGET_ID) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+        val info = bundle?.let { BundleCompat.getParcelable(it, "provider", AppWidgetProviderInfo::class.java) }
+        val stage = bundle?.getString("stage")
+        if (id > 0 && info != null && stage in listOf(BINDING, CONFIGURING)) {
+            val pin = BundleCompat.getParcelable(requireNotNull(bundle), "pin", LauncherApps.PinItemRequest::class.java)
+            pending = Pending(id, info, requireNotNull(stage), pin)
+        }
+        // Confirmed widgets belong exclusively to Pending. Only an unaccepted, still-valid
+        // confirmation is eligible for redisplay when acceptPin supplies a fresh callback.
+        if (pending == null && bundle != null) {
+            pinConfirmation = BundleCompat.getParcelable(bundle, "confirmation", LauncherApps.PinItemRequest::class.java)
+                ?.takeIf { runCatching { it.isValid }.getOrDefault(false) }
+        }
+        val orphan = journal.getInt("id", AppWidgetManager.INVALID_APPWIDGET_ID)
+        if (orphan != AppWidgetManager.INVALID_APPWIDGET_ID && orphan != pending?.id) {
+            runCatching { host.deleteAppWidgetId(orphan) }
+        }
+        if (pending == null) journal.edit().remove("id").apply()
+        else journal.edit().putInt("id", requireNotNull(pending).id).apply()
+    }
+
+    private fun cancelPending() {
+        pending?.let { runCatching { host.deleteAppWidgetId(it.id) } }
+        pending = null
+        journal.edit().remove("id").apply()
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        stop()
+        pinDialog?.dismiss()
+        pinDialog = null
+        pinConfirmation = null
+        if (!activity.isChangingConfigurations) cancelPending()
+        nativeHost.releaseViews()
+        activity.lifecycle.removeObserver(lifecycleObserver)
+        activity.savedStateRegistry.unregisterSavedStateProvider(STATE_KEY)
+        bindLauncher.unregister()
+    }
+
+    private companion object {
+        const val HOST_ID = 0x4C495445
+        const val STATE_KEY = "dev.liteluncher.widget.pending"
+        const val CONFIGURE_REQUEST_CODE = 0x4C49
+        const val BINDING = "bind"
+        const val CONFIGURING = "configure"
+    }
+}
+
+private class LauncherWidgetHost(context: Context, id: Int) : AppWidgetHost(context, id) {
+    override fun onCreateView(context: Context, appWidgetId: Int, appWidget: AppWidgetProviderInfo): AppWidgetHostView =
+        LauncherWidgetHostView(context)
+
+    fun releaseViews() = clearViews()
+}
+
+/** Normal child clicks/scrolling remain native; only a stationary hold enters launcher editing. */
+internal class LauncherWidgetHostView(context: Context) : AppWidgetHostView(context) {
+    var edit: (() -> Unit)? = null
+    private val slop = ViewConfiguration.get(context).scaledTouchSlop
+    private var down: MotionEvent? = null
+    private var holding = false
+    private var waiting = false
+    private val hold = Runnable {
+        waiting = false
+        val event = down ?: return@Runnable
+        if (!isAttachedToWindow || edit == null) return@Runnable
+        holding = true
+        val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+        super.dispatchTouchEvent(cancel)
+        cancel.recycle()
+        parent?.requestDisallowInterceptTouchEvent(true)
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        edit?.invoke()
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            clearHold()
+            holding = false
+            down = MotionEvent.obtain(event)
+            waiting = true
+            postDelayed(hold, ViewConfiguration.getLongPressTimeout().toLong())
+        }
+        val first = down
+        if (event.pointerCount > 1 || (event.actionMasked == MotionEvent.ACTION_MOVE && first != null &&
+                (abs(event.x - first.x) > slop || abs(event.y - first.y) > slop))) clearHold()
+        val consumed = if (holding) true else super.dispatchTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            clearHold()
+            holding = false
+        }
+        // Capture a down on non-clickable widget background too, so subsequent movement
+        // can cancel the hold before launcher editing is triggered.
+        return consumed || (event.actionMasked == MotionEvent.ACTION_DOWN && edit != null)
+    }
+
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+        if (disallowIntercept) clearHold()
+        super.requestDisallowInterceptTouchEvent(disallowIntercept)
+    }
+
+    private fun clearHold() {
+        if (waiting) removeCallbacks(hold)
+        waiting = false
+        down?.recycle()
+        down = null
+    }
+
+    override fun onDetachedFromWindow() {
+        clearHold()
+        super.onDetachedFromWindow()
+    }
+}
