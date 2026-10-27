@@ -391,6 +391,7 @@ fun LauncherApp(
                                         onVoice = onVoice
                                     )
                                     Screen.DESKTOP -> Box(Modifier.fillMaxSize()) {
+                                        val pageWidgets = state.widgets.filter { it.page == currentDesktopPage }
                                         Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
                                             // Multi-page desktop pagination header
                                             val pageCount = state.prefs.desktop.pageCount
@@ -408,7 +409,6 @@ fun LauncherApp(
                                                 }
                                             }
 
-                                            val pageWidgets = state.widgets.filter { it.page == currentDesktopPage }
                                             WidgetCanvas(
                                                 controller = widgets,
                                                 prefs = state.prefs.desktop,
