@@ -13,12 +13,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -39,34 +41,47 @@ import kotlinx.coroutines.withContext
 @Composable
 fun LauncherSearchField(
     query: String, onQuery: (String) -> Unit, placeholder: String, onSubmit: () -> Unit,
-    onVoice: (() -> Unit)?, theme: SurfaceTheme, focusRequester: FocusRequester? = null
+    onVoice: (() -> Unit)?, theme: SurfaceTheme, focusRequester: FocusRequester? = null,
+    onActivate: (() -> Unit)? = null, onBack: (() -> Unit)? = null
 ) {
     val foreground = surfaceContent(theme)
-    OutlinedTextField(
-        value = query,
-        onValueChange = { onQuery(it.take(512)) },
-        modifier = Modifier.fillMaxWidth().then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
-        singleLine = true,
-        shape = RoundedCornerShape(19.dp),
-        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
-        placeholder = { Text(placeholder, fontSize = 13.sp, color = foreground.copy(alpha = .5f)) },
-        leadingIcon = { Icon(Icons.Rounded.Search, null, tint = foreground.copy(alpha = .65f), modifier = Modifier.size(21.dp)) },
-        trailingIcon = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (query.isNotEmpty()) IconButton(onClick = { onQuery("") }) { Icon(Icons.Rounded.Close, "Clear search", tint = foreground, modifier = Modifier.size(19.dp)) }
-                if (onVoice != null) IconButton(onClick = onVoice) { Icon(Icons.Rounded.MicNone, "Voice search", tint = foreground, modifier = Modifier.size(21.dp)) }
+    Row(
+        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(50))
+            .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
+            .then(if (onActivate != null) Modifier.clickable(onClick = onActivate) else Modifier)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Rounded.ArrowBack, "Back to home", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(21.dp))
+        } else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Search, null, tint = foreground.copy(alpha = .65f), modifier = Modifier.size(21.dp))
+        }
+        if (onActivate != null) {
+            Text(placeholder, color = foreground.copy(alpha = .65f), fontSize = 14.sp, modifier = Modifier.weight(1f))
+        } else BasicTextField(
+            value = query,
+            onValueChange = { onQuery(it.take(512)) },
+            modifier = Modifier.weight(1f).then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
+            singleLine = true,
+            textStyle = LocalTextStyle.current.copy(color = foreground, fontSize = 14.sp),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+            decorationBox = { input ->
+                Box {
+                    if (query.isEmpty()) Text(placeholder, color = foreground.copy(alpha = .65f), fontSize = 14.sp)
+                    input()
+                }
             }
-        },
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = foreground, unfocusedTextColor = foreground,
-            focusedContainerColor = surfaceColor(theme, MaterialTheme.colorScheme.primary),
-            unfocusedContainerColor = surfaceColor(theme, MaterialTheme.colorScheme.primary),
-            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = .5f),
-            unfocusedBorderColor = foreground.copy(alpha = .09f)
-        ),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { onSubmit() })
-    )
+        )
+        if (query.isNotEmpty()) IconButton(onClick = { onQuery("") }, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Rounded.Close, "Clear search", tint = foreground, modifier = Modifier.size(19.dp))
+        }
+        if (onVoice != null) IconButton(onClick = onVoice, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Rounded.MicNone, "Voice search", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(21.dp))
+        }
+    }
 }
 
 @Composable
@@ -123,7 +138,8 @@ fun SearchScreen(
             },
             onVoice = if (prefs.voice) onVoice else null,
             theme = state.prefs.appearance.search,
-            focusRequester = focus
+            focusRequester = focus,
+            onBack = { keyboard?.hide(); actions.navigate(Screen.HOME) }
         )
     }
 
@@ -137,8 +153,8 @@ fun SearchScreen(
 
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
             if (search.isBlank()) {
-                if (prefs.history && state.history.isNotEmpty()) item {
-                    SectionLabel("Recent searches", "Clear", { actions.update { it.copy(history = emptyList()) } })
+                if (prefs.history && state.history.isNotEmpty()) {
+                    item { SectionLabel("Recent searches", "Clear", { actions.update { it.copy(history = emptyList()) } }) }
                     items(state.history.take(12), key = { it }) { recent ->
                         val app = apps.firstOrNull {
                             (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(recent, true)

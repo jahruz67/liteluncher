@@ -81,8 +81,9 @@ fun HomeScreen(
                 onQuery = { actions.navigate(Screen.SEARCH) },
                 placeholder = state.prefs.search.barText,
                 onSubmit = { actions.navigate(Screen.SEARCH) },
-                onVoice = onVoice,
-                theme = state.prefs.appearance.search
+                onVoice = onVoice.takeIf { state.prefs.search.voice },
+                theme = state.prefs.appearance.search,
+                onActivate = { actions.navigate(Screen.SEARCH) }
             )
             Spacer(Modifier.height(8.dp))
         }
@@ -93,37 +94,42 @@ fun HomeScreen(
             Spacer(Modifier.height(32.dp))
         }
 
-        IconButton(onClick = actions.manageLayout, modifier = Modifier.size(32.dp).align(Alignment.End)) {
-            Icon(Icons.Rounded.Add, "Customize home layout", modifier = Modifier.size(18.dp))
-        }
-
         if (selected.isEmpty() && folders.isEmpty() && state.shortcuts.isEmpty()) {
-            EmptyCard(Icons.Rounded.Home, "A home of your own", "Choose your everyday apps and arrange them just how you like.", "Add apps", actions.manageLayout)
+            Box(Modifier.weight(1f)) {
+                EmptyCard(Icons.Rounded.Home, "A home of your own", "Choose your everyday apps and arrange them just how you like.", "Add apps", actions.manageLayout)
+            }
         } else {
             val slotCount = prefs.rows * prefs.columns
             val filledSlots = selected.size + folders.size + state.shortcuts.size
+            val dockInset = if (state.prefs.dock.enabled) (48 * state.prefs.dock.iconScale + 16).dp else 0.dp
+            BoxWithConstraints(Modifier.weight(1f).padding(
+                start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
+                end = if (state.prefs.dock.side == "Right") dockInset else 0.dp
+            )) {
+            val rowHeight = (maxHeight / prefs.rows).coerceAtLeast((48 * prefs.iconScale + if (prefs.labels) 40 else 16).dp)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(prefs.spacing.dp.coerceAtMost(24.dp)),
-                verticalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp)
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy((prefs.spacing / 4).dp),
+                verticalArrangement = Arrangement.spacedBy(if (prefs.listMode) (prefs.spacing / 2).dp else 0.dp)
             ) {
                 items(selected.take(slotCount), key = { it.key }) { app ->
                     if (prefs.listMode) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs)
-                    else AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth())
+                    else AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth().height(rowHeight))
                 }
                 items(folders.take((slotCount - selected.size).coerceAtLeast(0)), key = { "folder:${it.id}" }) { folder ->
-                    FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, actions.manageLayout, Modifier.fillMaxWidth())
+                    FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, actions.manageLayout, Modifier.fillMaxWidth().height(if (prefs.listMode) 88.dp else rowHeight))
                 }
                 items(state.shortcuts.take((slotCount - selected.size - folders.size).coerceAtLeast(0)), key = { "shortcut:${it.packageName}:${it.id}:${it.userSerial}" }) { shortcut ->
                     val user = requireNotNull(context.getSystemService(android.os.UserManager::class.java)).getUserForSerialNumber(shortcut.userSerial)
                     val app = apps.firstOrNull { it.packageName == shortcut.packageName && it.user == user }
                     Column(
-                        Modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
+                        Modifier.height(if (prefs.listMode) 88.dp else rowHeight).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
                             if (user != null) repository.launchShortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
                             else android.widget.Toast.makeText(context, "This shortcut's profile is unavailable", android.widget.Toast.LENGTH_SHORT).show()
                         }, onLongClick = { actions.update { current -> current.copy(shortcuts = current.shortcuts - shortcut) } }).padding(8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Box {
                             if (app != null) AppIcon(app, repository, state, (48 * prefs.iconScale).toInt())
@@ -134,8 +140,9 @@ fun HomeScreen(
                     }
                 }
                 repeat((slotCount - filledSlots.coerceAtLeast(0)).coerceAtLeast(0)) {
-                    Box(Modifier.fillMaxWidth().aspectRatio(1f))
+                    item { Box(Modifier.fillMaxWidth().height(if (prefs.listMode) 0.dp else rowHeight)) }
                 }
+            }
             }
         }
 
@@ -146,8 +153,9 @@ fun HomeScreen(
                 onQuery = { actions.navigate(Screen.SEARCH) },
                 placeholder = state.prefs.search.barText,
                 onSubmit = { actions.navigate(Screen.SEARCH) },
-                onVoice = onVoice,
-                theme = state.prefs.appearance.search
+                onVoice = onVoice.takeIf { state.prefs.search.voice },
+                theme = state.prefs.appearance.search,
+                onActivate = { actions.navigate(Screen.SEARCH) }
             )
             Spacer(Modifier.height(8.dp))
         } else {
@@ -162,7 +170,11 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
     LaunchedEffect(Unit) { while (true) { now = ZonedDateTime.now(); delay(1000) } }
     val context = LocalContext.current
     val color = parseColor(prefs.color, Mist)
-    val font = FontFamily.SansSerif // Geometric sans-serif
+    val font = when (prefs.font) {
+        "Serif" -> FontFamily.Serif
+        "Monospace" -> FontFamily.Monospace
+        else -> FontFamily.SansSerif
+    }
     val clockApp = prefs.clockApp
     val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
     val clockShadow = Shadow(color = Color(0x40000000), offset = Offset(0f, 4f), blurRadius = 8f)
@@ -178,7 +190,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
         }
     }
 
-    Column(modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp)) {
+    Column(modifier.fillMaxWidth().padding(start = 12.dp, top = 16.dp, bottom = 28.dp)) {
         if (prefs.analog) {
             // Analog clock rendering
             Box(Modifier.size(110.dp).clickable(onClick = onClockClick).align(Alignment.Start), contentAlignment = Alignment.Center) {
@@ -209,9 +221,8 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                 }
             }
         } else {
-            // Digital clock: Line 1 = time + AM/PM superscript, Line 2 = date
             Row(
-                verticalAlignment = Alignment.Top,
+                verticalAlignment = Alignment.Bottom,
                 modifier = Modifier.clickable(onClick = onClockClick)
             ) {
                 val timeStr = now.format(DateTimeFormatter.ofPattern(if (prefs.use24Hour) "HH:mm" else "h:mm"))
@@ -220,8 +231,8 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                     color = color,
                     fontSize = (prefs.size * textScale).sp,
                     fontFamily = font,
-                    fontWeight = FontWeight.Light,
-                    letterSpacing = (-3).sp,
+                    fontWeight = if (prefs.font == "Bold") FontWeight.Bold else FontWeight.Light,
+                    letterSpacing = (-1).sp,
                     lineHeight = (prefs.size * textScale + 2).sp,
                     style = TextStyle(shadow = clockShadow)
                 )
@@ -229,22 +240,21 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                     Text(
                         text = now.format(DateTimeFormatter.ofPattern("a")),
                         color = color.copy(alpha = .7f),
-                        fontSize = (prefs.size * 0.32f * textScale).sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.sp,
+                        fontSize = (prefs.size * 0.43f * textScale).sp,
+                        fontWeight = FontWeight.Normal,
                         style = TextStyle(shadow = clockShadow),
-                        modifier = Modifier.padding(start = 6.dp, top = 6.dp)
+                        modifier = Modifier.padding(start = 6.dp, bottom = 8.dp)
                     )
                 }
             }
 
             if (prefs.showDate) {
                 Text(
-                    text = now.format(DateTimeFormatter.ofPattern("MMMM d", Locale.getDefault())),
-                    color = Color(0xC0FFFFFF),
-                    fontSize = (13 * textScale).sp,
+                    text = now.format(DateTimeFormatter.ofPattern(
+                        (if (prefs.showDay) "EEEE, " else "") + "MMM d" + (if (prefs.showYear) ", yyyy" else ""), Locale.getDefault())),
+                    color = color,
+                    fontSize = (16 * textScale).sp,
                     fontFamily = font,
-                    letterSpacing = 1.sp,
                     style = TextStyle(shadow = clockShadow),
                     modifier = Modifier.clickable { onClockClick() }
                 )
@@ -289,18 +299,20 @@ fun AppDrawer(
     val letters = listOf("#", "1") + ('A'..'Z').map { it.toString() }
     val positions = remember(rows) { rows.mapIndexedNotNull { i, row -> (row as? DrawerRow.Header)?.let { it.letter to i } }.toMap() }
     fun scrollTo(letter: String) { positions[letter]?.let { index -> scope.launch { grid.scrollToItem(index) } } }
+    val showSearchBar = Screen.APPS in state.prefs.search.barScreens
+    val searchField = @Composable {
+        Box(Modifier.padding(end = 10.dp, top = 8.dp, bottom = 8.dp)) {
+            LauncherSearchField(filter, { filter = it }, state.prefs.search.barText, {},
+                onVoice.takeIf { state.prefs.search.voice }, state.prefs.appearance.search)
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(start = prefs.padding.dp, end = 2.dp)) {
-        Column(Modifier.padding(end = 16.dp)) {
-            // Pinned Search Pill with microphone voice trigger
-            LauncherSearchField(filter, { filter = it }, "Find an application", {}, onVoice, state.prefs.appearance.search)
-            SectionLabel("${rows.count { it is DrawerRow.App }} installed apps")
-        }
+        if (showSearchBar && !state.prefs.search.barAtBottom) searchField()
         if (rows.isEmpty()) EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
         else Row(Modifier.weight(1f)) {
-            // Exactly 4 columns of icons with single-line labels truncated via ellipsis (...)
             LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
+                columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
                 state = grid,
                 modifier = Modifier.weight(1f),
                 horizontalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp),
@@ -309,12 +321,12 @@ fun AppDrawer(
                 items(rows.size, key = { index -> when (val row = rows[index]) { is DrawerRow.Header -> "header:${row.letter}"; is DrawerRow.App -> row.app.key } },
                     span = { index -> if (rows[index] is DrawerRow.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1) }) { index ->
                     when (val row = rows[index]) {
-                        is DrawerRow.Header -> Row(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            // Flush-left uppercase header with hairline horizontal divider
-                            Text(row.letter, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(28.dp))
+                        is DrawerRow.Header -> Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(row.letter, color = LocalContentColor.current, fontSize = 14.sp, modifier = Modifier.width(22.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = .1f), thickness = 0.5.dp)
                         }
-                        is DrawerRow.App -> AppTile(row.app, repository, state, prefs.copy(columns = 4, multiline = false), badges[row.app.badgeKey] ?: 0, { actions.launch(row.app) }, { actions.menu(row.app) }, Modifier.fillMaxWidth())
+                        is DrawerRow.App -> if (prefs.listMode) AppListRow(row.app, repository, state, { actions.launch(row.app) }, { actions.menu(row.app) }, prefs)
+                            else AppTile(row.app, repository, state, prefs, badges[row.app.badgeKey] ?: 0, { actions.launch(row.app) }, { actions.menu(row.app) }, Modifier.fillMaxWidth())
                     }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(20.dp)) }
@@ -340,12 +352,13 @@ fun AppDrawer(
                         text = letter,
                         fontSize = 9.sp,
                         fontWeight = if (letter in positions) FontWeight.Bold else FontWeight.Normal,
-                        color = if (letter in positions) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .25f),
+                        color = if (letter in positions) LocalContentColor.current.copy(alpha = .7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .25f),
                         modifier = Modifier.fillMaxWidth().weight(1f).clickable(enabled = letter in positions) { scrollTo(letter) }.wrapContentSize()
                     )
                 }
             }
         }
+        if (showSearchBar && state.prefs.search.barAtBottom) searchField()
     }
 }
 
@@ -420,8 +433,9 @@ fun FavoritesScreen(
                     onQuery = { actions.navigate(Screen.SEARCH) },
                     placeholder = state.prefs.search.barText,
                     onSubmit = { actions.navigate(Screen.SEARCH) },
-                    onVoice = onVoice,
-                    theme = state.prefs.appearance.search
+                    onVoice = onVoice.takeIf { state.prefs.search.voice },
+                    theme = state.prefs.appearance.search,
+                    onActivate = { actions.navigate(Screen.SEARCH) }
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -459,8 +473,9 @@ fun FavoritesScreen(
                     onQuery = { actions.navigate(Screen.SEARCH) },
                     placeholder = state.prefs.search.barText,
                     onSubmit = { actions.navigate(Screen.SEARCH) },
-                    onVoice = onVoice,
-                    theme = state.prefs.appearance.search
+                    onVoice = onVoice.takeIf { state.prefs.search.voice },
+                    theme = state.prefs.appearance.search,
+                    onActivate = { actions.navigate(Screen.SEARCH) }
                 )
             }
         }

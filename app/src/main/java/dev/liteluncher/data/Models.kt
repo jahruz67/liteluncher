@@ -55,16 +55,16 @@ enum class SearchTarget(val title: String) {
 data class GridPrefs(
     val columns: Int = 4, val rows: Int = 5, val iconScale: Float = 1f,
     val labels: Boolean = true, val multiline: Boolean = false,
-    val padding: Int = 20, val spacing: Int = 16, val listMode: Boolean = false,
+    val padding: Int = 12, val spacing: Int = 16, val listMode: Boolean = false,
     val textScale: Float = 1f, val intermediateSteps: Int = 0, val borderPadding: String = "Default",
     val preventChanges: Boolean = false
 )
 @Serializable
 data class ClockPrefs(
-    val enabled: Boolean = true, val use24Hour: Boolean = false, val size: Int = 76,
+    val enabled: Boolean = true, val use24Hour: Boolean = false, val size: Int = 52,
     val color: String = "#C0FFFFFF", val font: String = "Light", val showYear: Boolean = false,
     val analog: Boolean = false, val clockApp: String = "Clock", val showDate: Boolean = true,
-    val showDay: Boolean = true, val textScale: Float = .85f
+    val showDay: Boolean = true, val textScale: Float = 1f
 )
 @Serializable
 data class DockPrefs(
@@ -107,7 +107,7 @@ data class FavoritesPrefs(
 data class AppearancePrefs(
     val mode: ThemeMode = ThemeMode.DARK, val launcher: SurfaceTheme = SurfaceTheme.GLASS,
     val dock: SurfaceTheme = SurfaceTheme.GLASS, val search: SurfaceTheme = SurfaceTheme.GLASS,
-    val dim: Float = .32f, val accent: String = "#3B82F6", val iconPack: String = "",
+    val dim: Float = .12f, val accent: String = "#6FA8D2", val iconPack: String = "",
     val iconShape: IconShape = IconShape.SQUIRCLE, val lightStatusIcons: Boolean = true,
     val lightNavigationIcons: Boolean = true, val darkTexts: Boolean = false,
     val dimMode: String = "Follow Theme", val backgroundColor: String = "#80000000", val forceAdaptive: Boolean = false,

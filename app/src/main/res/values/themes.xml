@@ -6,7 +6,7 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowShowWallpaper">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorAccent">#C1F17C</item>
+        <item name="android:colorAccent">#6FA8D2</item>
         <item name="android:windowSoftInputMode">adjustResize</item>
     </style>
 </resources>

@@ -1,10 +1,9 @@
 package dev.liteluncher.ui
 
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -52,53 +51,16 @@ class ScreenManager(initial: Screen = Screen.HOME) {
     }
 }
 
-/** Real-time horizontal pager gesture: finger tracks canvas 1:1 (translationX = touchDeltaX),
- *  fling velocity completes the transition with spring physics on release. */
-@Composable
-fun Modifier.pagerGesture(
-    onTranslate: (Float) -> Unit,
-    onFling: (Float, Float) -> Unit,
-    onVerticalSwipe: (Direction) -> Unit
-): Modifier {
-    val translateAction by rememberUpdatedState(onTranslate)
-    val flingAction by rememberUpdatedState(onFling)
-    val verticalAction by rememberUpdatedState(onVerticalSwipe)
-    return pointerInput(Unit) {
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
-            val start = down.position
-            var lastPos = down.position
-            var finished = false
-            while (!finished) {
-                val event = awaitPointerEvent(PointerEventPass.Final)
-                event.changes.firstOrNull { it.id == down.id }?.let { change ->
-                    if (change.position != change.previousPosition) {
-                        val deltaX = change.position.x - lastPos.x
-                        translateAction(deltaX)
-                        lastPos = change.position
-                    }
-                }
-                finished = event.changes.all { !it.pressed }
-            }
-            val upEvent = event.changes.firstOrNull { it.id == down.id }
-            val totalDx = upEvent?.let { it.position.x - start.x } ?: 0f
-            val velocityX = upEvent?.velocity?.velocity?.x ?: 0f
-            flingAction(velocityX, totalDx)
-            val totalDy = upEvent?.let { it.position.y - start.y } ?: 0f
-            if (abs(totalDy) > abs(totalDx) && abs(totalDy) > 64 * density) {
-                verticalAction(if (totalDy < 0) Direction.UP else Direction.DOWN)
-            }
-        }
-    }
-}
-
 /** Observe at Final so a list, icon or native widget retains its own touch sequence. */
 @Composable
 fun Modifier.launcherGestures(
-    fingers: Int, home: Boolean, onSwipe: (Direction, Int) -> Unit, onPinch: (Boolean) -> Unit
+    fingers: Int, home: Boolean, onSwipe: (Direction, Int) -> Unit, onPinch: (Boolean) -> Unit,
+    onTranslate: (Float) -> Unit = {}, onRelease: () -> Unit = {}
 ): Modifier {
     val swipeAction by rememberUpdatedState(onSwipe)
     val pinchAction by rememberUpdatedState(onPinch)
+    val translateAction by rememberUpdatedState(onTranslate)
+    val releaseAction by rememberUpdatedState(onRelease)
     return pointerInput(fingers, home) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
@@ -121,12 +83,15 @@ fun Modifier.launcherGestures(
                 lastSpan = (pressed[0].position - pressed[1].position).getDistance()
                 if (firstSpan == 0f) firstSpan = lastSpan
             }
+            if (!consumed && pointerCount >= fingers && abs(displacement.x) > abs(displacement.y) &&
+                abs(displacement.x) > viewConfiguration.touchSlop) translateAction(displacement.x)
             finished = pressed.isEmpty()
         }
+        releaseAction()
         val pinch = firstSpan > 0f && abs(lastSpan - firstSpan) > 64 * density
         when {
-            pinch && (!consumed || pointerCount >= 2) -> pinchAction(lastSpan < firstSpan)
-            pointerCount > 0 && (!consumed || pointerCount >= 2) &&
+            pinch && home && (!consumed || pointerCount >= 2) -> pinchAction(lastSpan < firstSpan)
+            pointerCount >= fingers && (!consumed || pointerCount >= 2) &&
                 maxOf(abs(displacement.x), abs(displacement.y)) > 68 * density -> {
                 val direction = if (abs(displacement.x) > abs(displacement.y)) {
                     if (displacement.x < 0) Direction.LEFT else Direction.RIGHT

@@ -25,7 +25,7 @@ import dev.liteluncher.data.LauncherState
 import dev.liteluncher.data.NavigationPrefs
 import dev.liteluncher.data.Screen
 
-private val FrostedGlass = Color(0x80222222)
+private val FrostedGlass = Color(0xB3EEEEEE)
 private val CardBorder = Color(0x33FFFFFF)
 private val RedBadge = Color(0xFFE53935)
 
@@ -71,22 +71,15 @@ fun ScreenManagerScreen(
     }
 
     SettingsTheme {
-        SettingsFrame("Manage screens", onBack) {
+        SettingsFrame("Screen Manager", onBack, background = Color.Transparent) {
             item {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        "5-Screen Cross Topology",
-                        fontSize = 11.sp,
-                        letterSpacing = 1.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
+                        if (navigation.fingers == 1) "One finger" else "Two fingers",
+                        fontSize = 13.sp,
+                        color = Color.White.copy(alpha = .75f)
                     )
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Tap the red badges to remove a screen or tap an empty slot to enable it. Desktop supports multiple pages.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
 
@@ -177,17 +170,17 @@ private fun SymmetricalCrossLayout(
     onAddDesktopPage: () -> Unit,
     onRemoveDesktopPage: () -> Unit
 ) {
-    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 24.dp)) {
         Canvas(Modifier.matchParentSize()) {
             val center = Offset(size.width / 2f, size.height / 2f)
-            val lineColor = Color(0x663B82F6)
+            val lineColor = Color(0x66FFFFFF)
             drawLine(lineColor, Offset(center.x, 24.dp.toPx()), Offset(center.x, size.height - 24.dp.toPx()), strokeWidth = 2.dp.toPx())
             drawLine(lineColor, Offset(24.dp.toPx(), center.y), Offset(size.width - 24.dp.toPx(), center.y), strokeWidth = 2.dp.toPx())
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // Row 1: Top (Search)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Spacer(Modifier.weight(1f))
                 CrossCard(
                     screen = Screen.SEARCH,
@@ -202,7 +195,7 @@ private fun SymmetricalCrossLayout(
             // Row 2: Desktop (Left), Home (Center), Application List (Right)
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 CrossCard(
@@ -218,8 +211,8 @@ private fun SymmetricalCrossLayout(
 
                 // Center Card: Home Screen
                 Surface(
-                    modifier = Modifier.weight(1f).height(156.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.weight(1f).height(128.dp),
+                    shape = RoundedCornerShape(6.dp),
                     color = FrostedGlass,
                     border = BorderStroke(1.dp, CardBorder)
                 ) {
@@ -229,13 +222,13 @@ private fun SymmetricalCrossLayout(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Box(
-                            Modifier.size(36.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), CircleShape),
+                            Modifier.size(36.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Rounded.Home, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Rounded.Home, null, tint = Color(0xFF454545), modifier = Modifier.size(26.dp))
                         }
                         Spacer(Modifier.height(8.dp))
-                        Text("Home Screen", fontWeight = FontWeight.Bold, fontSize = 13.sp, textAlign = TextAlign.Center)
+                        Text("Home Screen", color = Color(0xFF454545), fontSize = 12.sp, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Rounded.Lock, null, tint = Color.Gray, modifier = Modifier.size(12.dp))
@@ -255,7 +248,7 @@ private fun SymmetricalCrossLayout(
             }
 
             // Row 3: Bottom (Favorites)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Spacer(Modifier.weight(1f))
                 CrossCard(
                     screen = Screen.FAVORITES,
@@ -285,7 +278,7 @@ private fun CrossCard(
         Screen.DESKTOP -> Icons.Rounded.Widgets
         Screen.SEARCH -> Icons.Rounded.Search
         Screen.APPS -> Icons.Rounded.Apps
-        Screen.FAVORITES -> Icons.Rounded.StarOutline
+        Screen.FAVORITES -> Icons.Rounded.Favorite
         Screen.HOME -> Icons.Rounded.Home
     }
     val title = when (screen) {
@@ -295,9 +288,9 @@ private fun CrossCard(
 
     Box(modifier = modifier) {
         Surface(
-            modifier = Modifier.fillMaxWidth().height(156.dp)
+            modifier = Modifier.fillMaxWidth().height(128.dp)
                 .clickable { if (!enabled) onSetEnabled(screen, true) },
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(6.dp),
             color = if (enabled) FrostedGlass else FrostedGlass.copy(alpha = 0.35f),
             border = BorderStroke(1.dp, if (enabled) CardBorder else Color(0x15FFFFFF))
         ) {
@@ -312,7 +305,7 @@ private fun CrossCard(
                     Icon(
                         icon,
                         contentDescription = null,
-                        tint = if (enabled) MaterialTheme.colorScheme.primary else Color.Gray,
+                        tint = if (enabled) Color(0xFF454545) else Color.Gray,
                         modifier = Modifier.size(26.dp)
                     )
                     Spacer(Modifier.height(6.dp))
@@ -322,7 +315,7 @@ private fun CrossCard(
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,
                         maxLines = 2,
-                        color = if (enabled) Color.White else Color.Gray
+                        color = if (enabled) Color(0xFF454545) else Color.Gray
                     )
                 }
 

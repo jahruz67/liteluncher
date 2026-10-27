@@ -1,6 +1,7 @@
 package dev.liteluncher.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -52,29 +53,32 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
-internal val SettingsGreen = Color(0xFF3B82F6)
-internal val SettingsBackground = Color(0xFF151A17)
-internal val SettingsPanel = Color(0xFF212922)
+internal val SettingsGreen = Color(0xFF82B1D5)
+internal val SettingsBackground = Color(0xFF454545)
+internal val SettingsPanel = Color(0xFF505050)
+private val SettingsToolbar = Color(0xFF45657D)
 
 @Composable
 internal fun SettingsTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = SettingsGreen,
-            onPrimary = Color(0xFF1C2B0C),
-            primaryContainer = Color(0xFF35472A),
-            onPrimaryContainer = Color(0xFFE1F5CD),
-            secondary = Color(0xFFB9CCAA),
+            onPrimary = Color(0xFF202020),
+            primaryContainer = Color(0xFF45657D),
+            onPrimaryContainer = Color.White,
+            secondary = SettingsGreen,
             background = SettingsBackground,
-            onBackground = Color(0xFFF0F3EB),
+            onBackground = Color(0xFFEEEEEE),
             surface = SettingsBackground,
-            onSurface = Color(0xFFF0F3EB),
+            onSurface = Color(0xFFEEEEEE),
             surfaceVariant = SettingsPanel,
-            onSurfaceVariant = Color(0xFFBFC8BB),
-            outline = Color(0xFF7C8976)
+            onSurfaceVariant = Color(0xFFBDBDBD),
+            outline = Color(0xFF888888)
         ),
     ) {
         CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground, content = content)
@@ -86,24 +90,25 @@ internal fun SettingsFrame(
     title: String,
     onBack: () -> Unit,
     pageKey: String = title,
+    background: Color = SettingsBackground,
     content: LazyListScope.() -> Unit
 ) {
     // Each page owns its scroll position; returning to a long page restores it.
     androidx.compose.runtime.key(pageKey) {
         val scroll = rememberLazyListState()
         Scaffold(
-            containerColor = SettingsBackground,
+            containerColor = background,
             topBar = {
-                Surface(color = SettingsBackground) {
+                Surface(color = if (background == Color.Transparent) Color.Transparent else SettingsToolbar) {
                     Row(
-                        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 8.dp, bottom = 8.dp),
+                        Modifier.fillMaxWidth().height(48.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
-                        Text(title, style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(title, fontSize = 16.sp,
+                            fontWeight = FontWeight.Normal, modifier = Modifier.weight(1f))
                         Spacer(Modifier.width(16.dp))
                     }
                 }
@@ -112,8 +117,7 @@ internal fun SettingsFrame(
             LazyColumn(
                 state = scroll,
                 modifier = Modifier.padding(padding),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 36.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 24.dp),
                 content = content
             )
         }
@@ -122,16 +126,10 @@ internal fun SettingsFrame(
 
 @Composable
 internal fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = SettingsPanel),
-        shape = RoundedCornerShape(20.dp)
-    ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, color = SettingsGreen, style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(2.dp))
-            content()
-        }
+    Column(Modifier.fillMaxWidth()) {
+        Text(title, color = SettingsGreen, fontSize = 12.sp, fontStyle = FontStyle.Italic,
+            modifier = Modifier.fillMaxWidth().background(SettingsPanel).padding(horizontal = 12.dp, vertical = 5.dp))
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) { content() }
     }
 }
 
@@ -139,21 +137,20 @@ internal fun SettingsSection(title: String, content: @Composable () -> Unit) {
 internal fun SettingsNote(text: String) {
     Text(text, style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(vertical = 4.dp))
+        modifier = Modifier.padding(vertical = 2.dp))
 }
 
 @Composable
 internal fun SettingsLink(title: String, description: String, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(title, fontSize = 14.sp)
             if (description.isNotBlank()) SettingsNote(description)
         }
         Spacer(Modifier.width(8.dp))
-        Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(22.dp))
     }
 }
 
@@ -165,7 +162,7 @@ internal fun ToggleSetting(title: String, checked: Boolean, description: String 
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(title, fontSize = 14.sp)
             if (description.isNotBlank()) SettingsNote(description)
         }
         Spacer(Modifier.width(12.dp))
@@ -185,8 +182,8 @@ internal fun FloatSetting(
     val safeValue = if (value.isFinite()) value.coerceIn(range) else range.start
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-            Text(display(safeValue), color = SettingsGreen, style = MaterialTheme.typography.labelLarge)
+            Text(title, Modifier.weight(1f), fontSize = 14.sp)
+            Text(display(safeValue), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }
         Slider(value = safeValue, onValueChange = onChange,
             modifier = Modifier.semantics { contentDescription = title },

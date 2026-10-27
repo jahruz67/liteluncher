@@ -91,7 +91,8 @@ fun AppTile(
     val iconSize = (48 * prefs.iconScale).toInt()
     val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
     Column(modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick)
-        .padding(vertical = 8.dp, horizontal = 2.dp).semantics { contentDescription = label }, horizontalAlignment = Alignment.CenterHorizontally) {
+        .padding(vertical = 8.dp, horizontal = 2.dp).semantics { contentDescription = label },
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box {
             AppIcon(app, repository, state, iconSize)
             if (state.prefs.badges.enabled && badgeCount > 0) {
@@ -103,8 +104,8 @@ fun AppTile(
             }
         }
         if (prefs.labels) {
-            Spacer(Modifier.height(9.dp))
-            Text(label, color = LocalContentColor.current, fontSize = (11 * textScale).sp, lineHeight = (15 * textScale).sp,
+            Spacer(Modifier.height(5.dp))
+            Text(label, color = LocalContentColor.current, fontSize = (12 * textScale).sp, lineHeight = (15 * textScale).sp,
                 textAlign = TextAlign.Center, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -113,7 +114,8 @@ fun AppTile(
 @Composable
 fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
     onClick: () -> Unit, onLongClick: () -> Unit = {}, modifier: Modifier = Modifier) {
-    Column(modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (48 * prefs.iconScale).dp
         val folderColor = parseColor(state.prefs.folders.color)
         val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
@@ -133,8 +135,8 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
             }
         }
         if (prefs.labels) {
-            Spacer(Modifier.height(9.dp))
-            Text(folder.name, fontSize = (11 * textScale).sp, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(5.dp))
+            Text(folder.name, fontSize = (12 * textScale).sp, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         }
     }
 }

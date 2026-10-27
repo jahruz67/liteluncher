@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Checkbox
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -77,7 +79,12 @@ fun SettingsScreen(
     BackHandler(onBack = back)
     SettingsTheme {
         savedPages.SaveableStateProvider(page) {
-            SettingsFrame(title = page, onBack = back) {
+            SettingsFrame(title = when (page) {
+                "Home" -> "Home Screen"
+                "App drawer" -> "Application List"
+                "Behavior" -> "Behavior & Animations"
+                else -> page
+            }, onBack = back) {
                 when (page) {
                     "Settings" -> settingsIndex(state, { page = it }, onManageScreens, onDefaultHome)
                     "Home" -> homePreferences(state.prefs, apps, update)
@@ -122,54 +129,40 @@ private fun LazyListScope.settingsIndex(
     onDefaultHome: () -> Unit
 ) {
     item {
-        SettingsSection("Make Lite Luncher your home") {
-            SettingsLink("Default home app", "Open Android's default launcher settings", onDefaultHome)
+        SettingsSection("Screens") {
+            SettingsIndexLink("Home Screen", Icons.Rounded.Home) { navigate("Home") }
+            SettingsIndexLink("Dock", Icons.Rounded.Dock) { navigate("Dock") }
+            SettingsIndexLink("Application List", Icons.Rounded.Apps) { navigate("App drawer") }
+            SettingsIndexLink("Favorites", Icons.Rounded.Favorite) { navigate("Favorites") }
+            SettingsIndexLink("Search", Icons.Rounded.Search) { navigate("Search") }
+            SettingsIndexLink("Desktop", Icons.Rounded.Widgets) { navigate("Desktop") }
+            SettingsIndexLink("Screen Manager", Icons.Rounded.Dashboard, onManageScreens)
         }
     }
     item {
-        ExpandableCategory("Screens", "Layouts, clock, dock and screen navigation") {
-            SettingsLink("Home", "Grid, labels and clock") { navigate("Home") }
-            SettingsLink("Dock", "Placement, size and folders") { navigate("Dock") }
-            SettingsLink("App drawer", "Grid and list layout") { navigate("App drawer") }
-            SettingsLink("Favorites", "Usage, contacts and layout") { navigate("Favorites") }
-            SettingsLink("Search", "Sources, search engine and results") { navigate("Search") }
-            SettingsLink("Desktop", "Widget area and grid") { navigate("Desktop") }
-            SettingsLink("Manage screens", "${state.prefs.navigation.enabledScreens.size} screens enabled · directional layout", onManageScreens)
+        SettingsSection("Customization") {
+            SettingsIndexLink("Appearance", Icons.Rounded.Palette) { navigate("Appearance") }
+            SettingsIndexLink("Notifications", Icons.Rounded.Notifications) { navigate("Notification badges") }
+            SettingsIndexLink("Folder", Icons.Rounded.Folder) { navigate("Folders") }
+            SettingsIndexLink("Gestures", Icons.Rounded.Gesture) { navigate("Gestures") }
+            SettingsIndexLink("Behavior & Animations", Icons.Rounded.Tune) { navigate("Behavior") }
         }
     }
     item {
-        ExpandableCategory("Customization", "Themes, icons, badges and folders") {
-            SettingsLink("Appearance", "Independent surface themes and icon pack") { navigate("Appearance") }
-            SettingsLink("Notification badges", "Notification access, counts and color") { navigate("Notification badges") }
-            SettingsLink("Folders", "Live preview and folder appearance") { navigate("Folders") }
-        }
-    }
-    item {
-        ExpandableCategory("Controls", "Gestures and launcher behavior") {
-            SettingsLink("Gestures", "Actions, apps and native app shortcuts") { navigate("Gestures") }
-            SettingsLink("Behavior", "System bars, wallpaper and transitions") { navigate("Behavior") }
-        }
-    }
-    item {
-        ExpandableCategory("Apps & data", "Privacy and backup") {
-            SettingsLink("Hidden apps", "${state.hiddenApps.size} apps hidden") { navigate("Hidden apps") }
-            SettingsLink("Backup & restore", "Export or import with Android's document picker") { navigate("Backup & restore") }
+        SettingsSection("General") {
+            SettingsIndexLink("Hidden Apps (${state.hiddenApps.size})", Icons.Rounded.VisibilityOff) { navigate("Hidden apps") }
+            SettingsIndexLink("Backup & Restore", Icons.Rounded.Save) { navigate("Backup & restore") }
+            SettingsIndexLink("Change Launcher App", Icons.Rounded.Home, onDefaultHome)
         }
     }
 }
 
 @Composable
-private fun ExpandableCategory(title: String, description: String, content: @Composable () -> Unit) {
-    var expanded by rememberSaveable { mutableStateOf(true) }
-    SettingsSection(title) {
-        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Text(description, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium)
-            Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse $title" else "Expand $title")
-        }
-        if (expanded) content()
+private fun SettingsIndexLink(title: String, icon: ImageVector, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(44.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(14.dp))
+        Text(title, fontSize = 14.sp)
     }
 }
 

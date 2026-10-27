@@ -10,11 +10,11 @@ import dev.liteluncher.data.AppearancePrefs
 import dev.liteluncher.data.SurfaceTheme
 import dev.liteluncher.data.ThemeMode
 
-val Ink = Color(0xFF131A16)
-val Panel = Color(0xFF202923)
+val Ink = Color(0xFF282828)
+val Panel = Color(0xFF3D3D3D)
 val Cerulean = Color(0xFF3B82F6)
-val Mist = Color(0xFFF1F4EC)
-val Muted = Color(0xFFA7B4A7)
+val Mist = Color(0xFFF0F0F0)
+val Muted = Color(0xFFB8B8B8)
 
 fun parseColor(value: String, fallback: Color = Cerulean): Color = runCatching {
     Color(android.graphics.Color.parseColor(value))
@@ -30,17 +30,17 @@ fun LauncherTheme(prefs: AppearancePrefs, content: @Composable () -> Unit) {
     val accent = parseColor(prefs.accent)
     MaterialTheme(
         colorScheme = if (dark) darkColorScheme(primary = accent, onPrimary = Ink, background = Ink, surface = Panel,
-            onBackground = Mist, onSurface = Mist, surfaceVariant = Color(0xFF2B362D), onSurfaceVariant = Muted)
-        else lightColorScheme(primary = Color(0xFF47672E), onPrimary = Color.White, background = Color(0xFFEBF0E5),
-            surface = Color(0xFFF4F7F0), onSurface = Ink, surfaceVariant = Color(0xFFDCE5D5)),
+            onBackground = Mist, onSurface = Mist, surfaceVariant = Color(0xFF484848), onSurfaceVariant = Muted)
+        else lightColorScheme(primary = accent, onPrimary = Color.White, background = Color(0xFFF2F2F2),
+            surface = Color(0xFFFAFAFA), onSurface = Ink, surfaceVariant = Color(0xFFE0E0E0)),
         content = content
     )
 }
 
 fun surfaceColor(theme: SurfaceTheme, accent: Color): Color = when (theme) {
-    SurfaceTheme.GLASS -> Ink.copy(alpha = .72f)
-    SurfaceTheme.DARK -> Color(0xFF1B231E).copy(alpha = .97f)
-    SurfaceTheme.LIGHT -> Color(0xFFEAF0E4).copy(alpha = .96f)
+    SurfaceTheme.GLASS -> Color(0xFF555555).copy(alpha = .58f)
+    SurfaceTheme.DARK -> Color(0xFF303030).copy(alpha = .97f)
+    SurfaceTheme.LIGHT -> Color(0xFFF0F0F0).copy(alpha = .96f)
     SurfaceTheme.ACCENT -> accent.copy(alpha = .92f)
 }
 

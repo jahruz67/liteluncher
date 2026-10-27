@@ -24,16 +24,19 @@ import dev.liteluncher.ui.ClockHeader
 @Composable
 internal fun LayoutPreferences(value: GridPrefs, onChange: ((GridPrefs) -> GridPrefs) -> Unit) {
     val dotColor = MaterialTheme.colorScheme.primary
-    Canvas(Modifier.fillMaxWidth().height(100.dp)) {
-        val step = minOf(size.width / (value.columns + 1), size.height / (value.rows + 1))
-        val left = (size.width - step * (value.columns - 1)) / 2
-        val top = (size.height - step * (value.rows - 1)) / 2
-        repeat(value.rows) { row -> repeat(value.columns) { col ->
-            drawCircle(dotColor, 2.dp.toPx(), Offset(left + col * step, top + row * step))
-        } }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            IntSetting("Columns", value.columns, 1..10) { next -> onChange { it.copy(columns = next) } }
+            IntSetting("Rows", value.rows, 1..16) { next -> onChange { it.copy(rows = next) } }
+        }
+        Canvas(Modifier.padding(start = 16.dp).width(52.dp).height(104.dp)) {
+            val stepX = size.width / (value.columns + 1)
+            val stepY = size.height / (value.rows + 1)
+            repeat(value.rows) { row -> repeat(value.columns) { col ->
+                drawCircle(dotColor, 1.5.dp.toPx(), Offset((col + 1) * stepX, (row + 1) * stepY))
+            } }
+        }
     }
-    IntSetting("Columns", value.columns, 1..10) { next -> onChange { it.copy(columns = next) } }
-    IntSetting("Rows", value.rows, 1..16) { next -> onChange { it.copy(rows = next) } }
     IntSetting("Intermediate steps", value.intermediateSteps, 0..4) { next -> onChange { it.copy(intermediateSteps = next) } }
     ChoiceSetting("Border padding", value.borderPadding, listOf("Default", "None", "Small", "Large").map { it to it }) { next -> onChange { it.copy(borderPadding = next) } }
     ToggleSetting("Prevent changes", value.preventChanges) { next -> onChange { it.copy(preventChanges = next) } }
