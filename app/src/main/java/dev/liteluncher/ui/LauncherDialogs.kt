@@ -76,7 +76,7 @@ fun AppContextDialog(app: AppEntry, state: LauncherState, repository: AppsReposi
                                 true
                             }.getOrDefault(false)
                             if (pinned) update { current -> current.copy(shortcuts = (current.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial)).distinctBy { Triple(it.packageName, it.id, it.userSerial) }) }
-                            else android.widget.Toast.makeText(context, "Set Lynx as your default home app to pin shortcuts.", android.widget.Toast.LENGTH_LONG).show()
+                            else android.widget.Toast.makeText(context, "Set Lite Luncher as your default home app to pin shortcuts.", android.widget.Toast.LENGTH_LONG).show()
                         }) { Icon(Icons.Rounded.Add, "Add shortcut to home", modifier = Modifier.size(18.dp)) }
                     }
                 }

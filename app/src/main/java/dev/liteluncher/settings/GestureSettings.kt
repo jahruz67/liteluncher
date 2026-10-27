@@ -141,7 +141,7 @@ private fun GestureBindingDialog(
                 if (action == Action.SHORTCUT) {
                     if (shortcuts.isNotEmpty()) ChoiceSetting("App shortcut", shortcutId,
                         shortcuts.map { it.id to (it.shortLabel?.toString() ?: it.id) }) { shortcutId = it }
-                    else SettingsNote("This app has no available shortcuts. Set Lynx as your default home app to allow shortcut access, then choose an app that publishes shortcuts.")
+                    else SettingsNote("This app has no available shortcuts. Set Lite Luncher as your default home app to allow shortcut access, then choose an app that publishes shortcuts.")
                 }
                 if (action == Action.NONE) SettingsNote("This gesture is disabled. Choose directional navigation to move between screens.")
             }
@@ -156,7 +156,7 @@ private fun GestureBindingDialog(
                     requireNotNull(launcher).pinShortcuts(selectedApp.packageName, (previous + shortcutId).distinct(), selectedApp.user)
                     true
                 }.getOrDefault(false) else true
-                if (!pinned) android.widget.Toast.makeText(context, "This shortcut could not be pinned. Set Lynx as your default home app.", android.widget.Toast.LENGTH_LONG).show()
+                if (!pinned) android.widget.Toast.makeText(context, "This shortcut could not be pinned. Set Lite Luncher as your default home app.", android.widget.Toast.LENGTH_LONG).show()
                 if (valid && pinned) onSave(GestureBinding(
                     action = action,
                     target = if (needsApp) target else "",

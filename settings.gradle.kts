@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "Lynx Launcher"
+rootProject.name = "Lite Luncher"
 include(":app")

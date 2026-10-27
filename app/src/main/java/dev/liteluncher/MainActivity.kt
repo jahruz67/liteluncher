@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
                     }.onFailure { toast("Install a voice recognition service to use voice search") }
                 },
                 onContacts = { contactsPermission.launch(Manifest.permission.READ_CONTACTS) },
-                onExport = { exportBackup.launch("lynx-launcher-backup.json") },
+                onExport = { exportBackup.launch("lite-luncher-backup.json") },
                 onImport = { importBackup.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
                 onDefaultHome = { SystemActions.defaultHome(this) }
             )

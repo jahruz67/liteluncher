@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.Lynx" parent="android:style/Theme.Material.NoActionBar">
+    <style name="Theme.LiteLuncher" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>

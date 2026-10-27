@@ -251,7 +251,7 @@ fun LauncherApp(
                             Row(Modifier.weight(1f).clickable { panel = "screens" }, verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(6.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
                                 Spacer(Modifier.width(8.dp))
-                                Text("LYNX", fontSize = 10.sp, letterSpacing = 3.sp, fontWeight = FontWeight.Bold)
+                                Text("Lite Luncher", fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                                 Text("  /  ${manager.current.title.lowercase()}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             IconButton(onClick = { navigate(Screen.SEARCH) }) { Icon(Icons.Rounded.Search, "Search", modifier = Modifier.size(21.dp)) }

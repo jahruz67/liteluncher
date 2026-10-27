@@ -119,7 +119,7 @@ private fun LazyListScope.settingsIndex(
     onDefaultHome: () -> Unit
 ) {
     item {
-        SettingsSection("Make Lynx your home") {
+        SettingsSection("Make Lite Luncher your home") {
             SettingsLink("Default home app", "Open Android's default launcher settings", onDefaultHome)
         }
     }
@@ -407,7 +407,7 @@ private fun LazyListScope.badgeSettings(
         val badge = prefs.badges
         SettingsSection("Notification badges") {
             ToggleSetting("Show badges", badge.enabled) { next -> update { it.copy(badges = it.badges.copy(enabled = next)) } }
-            SettingsLink("Notification access", "Allow Lynx to read active notifications for badges", onNotificationAccess)
+            SettingsLink("Notification access", "Allow Lite Luncher to read active notifications for badges", onNotificationAccess)
             ToggleSetting("Show notification counts", badge.counts, "Show a number instead of a dot.") { next -> update { it.copy(badges = it.badges.copy(counts = next)) } }
             FloatSetting("Badge size", badge.scale, .5f..1.5f) { next -> update { it.copy(badges = it.badges.copy(scale = next)) } }
             ValidatedTextSetting("Badge color", badge.color, "#RRGGBB or #AARRGGBB", ::colorError,

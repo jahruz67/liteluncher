@@ -9,7 +9,7 @@
         <intent><action android:name="android.speech.action.RECOGNIZE_SPEECH" /></intent>
         <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="https" /></intent>
     </queries>
-    <application android:allowBackup="false" android:icon="@drawable/ic_launcher" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.Lynx">
+    <application android:allowBackup="false" android:icon="@drawable/ic_launcher" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.LiteLuncher">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask" android:resizeableActivity="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

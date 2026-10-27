@@ -1,6 +1,6 @@
-<img src="assets/icon.svg" width="64" height="64" alt="Lynx Launcher">
+<img src="assets/icon.svg" width="64" height="64" alt="Lite Luncher">
 
-# Lynx Launcher
+# Lite Luncher
 
 A native Android home replacement written in Kotlin and Jetpack Compose. The interface pairs a wallpaper-backed workspace, charcoal surfaces, soft green accents, a large typographic clock, and a floating edge dock.
 
@@ -39,7 +39,7 @@ No builds, tests, compilation, lint, dependency sync or emulator runs were perfo
 
 ## GitHub APK releases
 
-`.github/workflows/release.yml` builds, signs and verifies a release APK, then publishes it as `lynx-launcher-vX.Y.Z.apk` on a GitHub Release. It uses JDK 17 and Android SDK 35. Push a tag such as `v1.0.0`, or run **Build and release APK** from the Actions tab with a release tag. For a manual run, select the branch/ref to build; a new tag points to that run's commit. If the tag already exists, select that tag as the run's ref so the APK matches its source.
+`.github/workflows/release.yml` builds, signs and verifies a release APK, then publishes it as `lite-luncher-vX.Y.Z.apk` on a GitHub Release. It uses JDK 17 and Android SDK 35. Push a tag such as `v1.0.0`, or run **Build and release APK** from the Actions tab with a release tag. For a manual run, select the branch/ref to build; a new tag points to that run's commit. If the tag already exists, select that tag as the run's ref so the APK matches its source.
 
 Before the first release, add these repository secrets under **Settings > Secrets and variables > Actions**:
 
@@ -48,12 +48,12 @@ Before the first release, add these repository secrets under **Settings > Secret
 - `ANDROID_SIGNING_STORE_PASSWORD`: the keystore password.
 - `ANDROID_SIGNING_KEY_PASSWORD`: the private key password.
 
-Use a dedicated Lynx Launcher signing key and keep a secure backup. Reuse the same key for every release so installed copies can update. The CloudApp signing key is not copied into this project. If you already distribute this application, use its existing signing key.
+Use a dedicated Lite Luncher signing key and keep a secure backup. Reuse the same key for every release so installed copies can update. If you already distribute this application, use its existing signing key.
 
 To encode an existing keystore in PowerShell:
 
 ```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\path\to\lynx-release.jks')) | Set-Clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\path\to\lite-luncher-release.jks')) | Set-Clipboard
 ```
 
 Paste the result into `ANDROID_SIGNING_KEYSTORE_BASE64`. The workflow restores the keystore only in the runner's temporary directory and removes it after the run. Missing secrets stop publication.
@@ -62,7 +62,7 @@ The tag without `v` becomes Android's `versionName`. The workflow run number plu
 
 ## Android integration details
 
-Set Lynx as the default home app using Settings → Default home app. Android grants shortcut-host access to the selected launcher. Native shortcuts are queried and pinned through `LauncherApps`; unavailable or revoked shortcuts fail gracefully.
+Set Lite Luncher as the default home app using Settings → Default home app. Android grants shortcut-host access to the selected launcher. Native shortcuts are queried and pinned through `LauncherApps`; unavailable or revoked shortcuts fail gracefully.
 
 Contact access is requested only from an explicit permission action. Usage access is optional: without it, Favorites uses this launcher's own launch counts. Notification badges require enabling the notification listener in Android settings. No accessibility service, call permission, broad package permission or direct network permission is requested. Web searches open in an installed browser; calculator and app searches run locally.
 
@@ -82,4 +82,4 @@ app/src/main/java/dev/liteluncher/
   settings/                  Settings hierarchy and visual directional screen manager
 ```
 
-Android contracts follow the [widget host documentation](https://developer.android.com/develop/ui/views/appwidgets/host) and [LauncherApps API](https://developer.android.com/reference/android/content/pm/LauncherApps). This is an independent implementation inspired by directional desktop launchers; it does not contain Lynx Launcher's proprietary code or artwork.
+Android contracts follow the [widget host documentation](https://developer.android.com/develop/ui/views/appwidgets/host) and [LauncherApps API](https://developer.android.com/reference/android/content/pm/LauncherApps).
