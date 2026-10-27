@@ -143,9 +143,6 @@ fun HomeScreen(
             }
         }
 
-        // Live Background Stopwatch directly beneath the home grid
-        LiveStopwatchReadout(Modifier.fillMaxWidth().padding(vertical = 4.dp))
-
         if (showSearchBar && barAtBottom) {
             Spacer(Modifier.height(8.dp))
             LauncherSearchField(
@@ -167,46 +164,6 @@ fun HomeScreen(
                 Icon(Icons.Rounded.South, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f), modifier = Modifier.size(15.dp))
             }
         }
-    }
-}
-
-@Composable
-fun LiveStopwatchReadout(modifier: Modifier = Modifier) {
-    var elapsedMillis by remember { mutableLongStateOf(311260L) } // Live stopwatch demo starts around 05:11.26
-    var running by remember { mutableStateOf(true) }
-
-    LaunchedEffect(running) {
-        while (running) {
-            delay(50)
-            elapsedMillis += 50
-        }
-    }
-
-    val minutes = (elapsedMillis / 60000) % 60
-    val seconds = (elapsedMillis / 1000) % 60
-    val millis = (elapsedMillis % 1000) / 10
-    val formatted = String.format(Locale.US, "%02d:%02d.%02d", minutes, seconds, millis)
-
-    Row(
-        modifier = modifier.clickable { running = !running },
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            Icons.Rounded.Timer,
-            contentDescription = "Active Stopwatch",
-            tint = Lime.copy(alpha = 0.8f),
-            modifier = Modifier.size(14.dp)
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            text = formatted,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Medium,
-            fontSize = 12.sp,
-            letterSpacing = 1.sp,
-            color = Mist.copy(alpha = 0.85f)
-        )
     }
 }
 

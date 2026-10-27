@@ -596,83 +596,49 @@ private fun FloatingDock(
     actions: WorkspaceActions
 ) {
     val prefs = state.prefs.dock
+    val theme = state.prefs.appearance.dock
     val isRight = prefs.side == "Right"
     val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }.take(prefs.maxItems)
     val folders = state.dockFolders.mapNotNull { id -> state.folders.find { it.id == id } }.take((prefs.maxItems - entries.size).coerceAtLeast(0))
-    val podWidth = (48 * prefs.iconScale + 18).dp.coerceAtLeast(60.dp)
-    val podShape = if (isRight) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)
-                   else RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)
+    val dockWidth = (48 * prefs.iconScale + 24).dp.coerceAtLeast(64.dp)
 
-    BoxWithConstraints(Modifier.fillMaxHeight().width(podWidth + 8.dp).windowInsetsPadding(WindowInsets.safeDrawing)) {
+    BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth + 16.dp).windowInsetsPadding(WindowInsets.safeDrawing)) {
         val totalItems = entries.size + folders.size + (if (prefs.allApps) 1 else 0)
-        val estimatedHeight = (totalItems.coerceAtLeast(1) * (48 * prefs.iconScale + 18) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
-        val topOffset = if (prefs.fullWidth) 12.dp else ((maxHeight - estimatedHeight) * prefs.alignment).coerceAtLeast(0.dp)
-
-        Column(
+        val estimatedHeight = (totalItems.coerceAtLeast(1) * (48 * prefs.iconScale + 14) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
+        val top = if (prefs.fullWidth) 12.dp else ((maxHeight - estimatedHeight) * prefs.alignment).coerceAtLeast(0.dp)
+        Surface(
             modifier = Modifier
-                .offset(y = topOffset)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(vertical = prefs.padding.dp),
-            horizontalAlignment = if (isRight) Alignment.End else Alignment.Start,
-            verticalArrangement = if (prefs.fullWidth) Arrangement.SpaceEvenly else Arrangement.spacedBy(8.dp) // ~8dp vertical gap between pods
+                .padding(start = if (!isRight) 8.dp else 0.dp, end = if (isRight) 8.dp else 0.dp)
+                .offset(y = top)
+                .width(dockWidth)
+                .then(if (prefs.fullWidth) Modifier.fillMaxHeight().padding(vertical = 12.dp) else Modifier),
+            color = surfaceColor(theme, MaterialTheme.colorScheme.primary),
+            contentColor = surfaceContent(theme),
+            shape = RoundedCornerShape(28.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, surfaceContent(theme).copy(alpha = .08f)),
+            shadowElevation = 8.dp
         ) {
-            val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, spacing = 2)
-
-            if (prefs.allApps && prefs.allAppsLeft) {
-                Surface(
-                    onClick = { actions.navigate(Screen.APPS) },
-                    shape = podShape,
-                    color = Color.White,
-                    contentColor = Ink,
-                    shadowElevation = 6.dp,
-                    modifier = Modifier.width(podWidth).height((48 * prefs.iconScale + 12).dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                        Icon(Icons.Rounded.Apps, "All Applications", tint = Ink, modifier = Modifier.size(24.dp))
-                    }
+            Column(
+                Modifier
+                    .heightIn(max = (maxHeight - top - 8.dp).coerceAtLeast(1.dp))
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 5.dp, vertical = prefs.padding.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = if (prefs.fullWidth) Arrangement.SpaceEvenly else Arrangement.spacedBy(3.dp)
+            ) {
+                val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, spacing = 4)
+                entries.forEach { app ->
+                    AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth())
                 }
-            }
-
-            entries.forEach { app ->
-                Surface(
-                    shape = podShape,
-                    color = Color.White, // Solid white (#FFFFFF) individual curved pod
-                    contentColor = Ink,
-                    shadowElevation = 6.dp,
-                    modifier = Modifier.width(podWidth)
-                ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
-                        AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) })
-                    }
+                folders.forEach { item ->
+                    FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) }, { actions.manageLayout() }, Modifier.fillMaxWidth())
                 }
-            }
-
-            folders.forEach { item ->
-                Surface(
-                    shape = podShape,
-                    color = Color.White,
-                    contentColor = Ink,
-                    shadowElevation = 6.dp,
-                    modifier = Modifier.width(podWidth)
-                ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
-                        FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) }, { actions.manageLayout() })
-                    }
+                if (entries.isNotEmpty() || folders.isNotEmpty()) {
+                    HorizontalDivider(Modifier.width(25.dp).padding(vertical = 5.dp), color = surfaceContent(theme).copy(alpha = .12f))
                 }
-            }
-
-            if (prefs.allApps && !prefs.allAppsLeft) {
-                Surface(
-                    onClick = { actions.navigate(Screen.APPS) },
-                    shape = podShape,
-                    color = Color.White,
-                    contentColor = Ink,
-                    shadowElevation = 6.dp,
-                    modifier = Modifier.width(podWidth).height((48 * prefs.iconScale + 12).dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                        Icon(Icons.Rounded.Apps, "All Applications", tint = Ink, modifier = Modifier.size(24.dp))
+                if (prefs.allApps) {
+                    IconButton(onClick = { actions.navigate(Screen.APPS) }, modifier = Modifier.size(44.dp)) {
+                        Icon(Icons.Rounded.Apps, "All applications", tint = surfaceContent(theme), modifier = Modifier.size(23.dp))
                     }
                 }
             }
