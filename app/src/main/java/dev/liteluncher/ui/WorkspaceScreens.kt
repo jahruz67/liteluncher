@@ -250,12 +250,12 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
             val datePattern = if (prefs.showYear) "MMMM d, yyyy" else "MMMM d"
             Text(
                 text = now.format(DateTimeFormatter.ofPattern(datePattern, Locale.getDefault())),
-                color = color.copy(alpha = .75f),
+                color = color,
                 fontSize = (13 * textScale).sp,
                 fontFamily = font,
                 letterSpacing = 1.sp,
                 style = TextStyle(shadow = clockShadow),
-                modifier = Modifier.clickable { SystemActions.open(context, Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)) }
+                modifier = Modifier.clickable { onClockClick() }
             )
         }
     }
@@ -444,7 +444,7 @@ fun FavoritesScreen(
         }
         if (prefs.showContacts) {
             item { SectionLabel("People", "Pin contact", { if (permitted) picker = true else actions.requestContacts() }) }
-            if (!permitted) item { EmptyCard(Icons.Rounded.PeopleOutline, "Keep your people close", "Allow contact access to pin the people you reach for most.", "Allow contacts", actions.requestContacts) }
+
             items(pinned.distinctBy { it.second.id }, key = { "contact:${it.second.id}" }) { (_, person) ->
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
                     SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(person.lookupUri)))

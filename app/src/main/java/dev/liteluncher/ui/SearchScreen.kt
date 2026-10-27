@@ -173,7 +173,6 @@ fun SearchScreen(
                 if (prefs.hint) {
                     item {
                         Spacer(Modifier.height(36.dp))
-                        EmptyCard(Icons.Rounded.TravelExplore, "One search. A little of everything.", "Find an app, do a quick calculation, look up a contact, or head to the web.")
                     }
                 }
             } else {

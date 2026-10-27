@@ -1,122 +1,225 @@
 package dev.liteluncher.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.AppEntry
 import dev.liteluncher.platform.AppsRepository
-import java.util.UUID
+
+private val FrostedGlass = Color(0x80222222)
+private val CardBorder = Color(0x33FFFFFF)
+private val RedBadge = Color(0xFFE53935)
+
+private val navigationPresets = listOf(
+    "Cross" to Screen.entries.toSet(),
+    "Horizontal" to setOf(Screen.HOME, Screen.DESKTOP, Screen.APPS),
+    "Vertical" to setOf(Screen.HOME, Screen.SEARCH, Screen.FAVORITES),
+    "Home only" to setOf(Screen.HOME)
+)
 
 @Composable
 fun ManageLayoutScreen(state: LauncherState, apps: List<AppEntry>, repository: AppsRepository, update: ((LauncherState) -> LauncherState) -> Unit, onBack: () -> Unit) {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    var filter by rememberSaveable { mutableStateOf("") }
-    var editingFolder by remember { mutableStateOf<FolderItem?>(null) }
+    val navigation = state.prefs.navigation
+    var advanced by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     BackHandler(onBack = onBack)
-    val tabs = listOf("Home", "Dock", "Favorites", "Folders")
-    val currentTab = tab
-    fun selected(source: LauncherState): List<String> = when (currentTab) { 0 -> source.homeApps; 1 -> source.dockApps; else -> source.favoriteApps }
-    fun replace(source: LauncherState, keys: List<String>): LauncherState = when (currentTab) {
-        0 -> source.copy(homeApps = keys); 1 -> source.copy(dockApps = keys); else -> source.copy(favoriteApps = keys)
+
+    val setEnabled: (Screen, Boolean) -> Unit = { screen, enabled ->
+        if (screen != Screen.HOME) {
+            update { current ->
+                val previous = current.prefs.navigation
+                val screens = (if (enabled) previous.enabledScreens + screen else previous.enabledScreens - screen) + Screen.HOME
+                current.copy(prefs = current.prefs.copy(navigation = previous.copy(
+                    enabledScreens = screens, preset = "Custom"
+                )))
+            }
+        }
     }
-    val keys = selected(state)
-    val capacity = when (tab) {
-        0 -> (state.prefs.home.columns * state.prefs.home.rows - state.homeFolders.size - state.shortcuts.size).coerceAtLeast(0)
-        1 -> (state.prefs.dock.maxItems - state.dockFolders.size).coerceAtLeast(0)
-        else -> state.prefs.favorites.maxItems
-    }
+
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
             Text("Manage layout", fontSize = 22.sp, modifier = Modifier.weight(1f))
         }
-        ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) { tabs.forEachIndexed { index, title -> Tab(selected = tab == index, onClick = { tab = index; filter = "" }, text = { Text(title, fontSize = 13.sp) }) } }
-        if (tab == 3) {
-            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-                item { SectionLabel("App collections", "New folder", { editingFolder = FolderItem(UUID.randomUUID().toString(), "New folder") }) }
-                if (state.folders.isEmpty()) item { EmptyCard(Icons.Rounded.FolderOpen, "A place for related apps", "Create a folder, choose its applications, then add it to your home or dock.") }
-                items(state.folders, key = { it.id }) { folder ->
-                    ElevatedCard(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                        Column(Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                FolderTile(folder, apps, repository, state, GridPrefs(labels = false), { editingFolder = folder }, modifier = Modifier.width(58.dp))
-                                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                                    Text(folder.name, fontSize = 17.sp)
-                                    Text("${folder.apps.size} applications", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                ScreenCard(
+                    screen = Screen.HOME, title = "Home", icon = Icons.Rounded.Home,
+                    enabled = true, onToggle = {}, isCenter = true
+                )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Spacer(Modifier.width(110.dp))
+                ScreenCard(
+                    screen = Screen.SEARCH, title = "Search", icon = Icons.Rounded.Search,
+                    enabled = Screen.SEARCH in navigation.enabledScreens,
+                    onToggle = { setEnabled(Screen.SEARCH, it) },
+                    isCenter = false
+                )
+                Spacer(Modifier.width(110.dp))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                ScreenCard(
+                    screen = Screen.DESKTOP, title = "Desktop", icon = Icons.Rounded.Widgets,
+                    enabled = Screen.DESKTOP in navigation.enabledScreens,
+                    onToggle = { setEnabled(Screen.DESKTOP, it) },
+                    isCenter = false
+                )
+                Spacer(Modifier.weight(1f))
+                ScreenCard(
+                    screen = Screen.APPS, title = "App List", icon = Icons.Rounded.Apps,
+                    enabled = Screen.APPS in navigation.enabledScreens,
+                    onToggle = { setEnabled(Screen.APPS, it) },
+                    isCenter = false
+                )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Spacer(Modifier.width(110.dp))
+                ScreenCard(
+                    screen = Screen.FAVORITES, title = "Favorites", icon = Icons.Rounded.StarOutline,
+                    enabled = Screen.FAVORITES in navigation.enabledScreens,
+                    onToggle = { setEnabled(Screen.FAVORITES, it) },
+                    isCenter = false
+                )
+                Spacer(Modifier.width(110.dp))
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = FrostedGlass,
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box {
+                    TextButton(onClick = { showMoreMenu = true }) {
+                        Icon(Icons.Rounded.MoreHoriz, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("More", fontSize = 12.sp)
+                    }
+                    DropdownMenu(
+                        expanded = showMoreMenu,
+                        onDismissRequest = { showMoreMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Fingers: ${if (navigation.fingers == 2) "Two fingers" else "One finger"}") },
+                            onClick = {
+                                update { current ->
+                                    current.copy(prefs = current.prefs.copy(navigation = current.prefs.navigation.copy(
+                                        fingers = if (navigation.fingers == 2) 1 else 2
+                                    )))
                                 }
-                                IconButton(onClick = { editingFolder = folder }) { Icon(Icons.Rounded.Edit, "Edit folder", modifier = Modifier.size(18.dp)) }
-                                IconButton(onClick = { update { it.copy(folders = it.folders.filterNot { item -> item.id == folder.id }, homeFolders = it.homeFolders - folder.id, dockFolders = it.dockFolders - folder.id) } }) { Icon(Icons.Rounded.DeleteOutline, "Delete folder", modifier = Modifier.size(18.dp)) }
+                                showMoreMenu = false
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(folder.id in state.homeFolders, { checked -> update { it.copy(homeFolders = if (checked) (it.homeFolders + folder.id).distinct() else it.homeFolders - folder.id) } })
-                                Text("Home", fontSize = 12.sp)
-                                Spacer(Modifier.width(12.dp))
-                                Checkbox(folder.id in state.dockFolders, { checked -> update { it.copy(dockFolders = if (checked) (it.dockFolders + folder.id).distinct() else it.dockFolders - folder.id) } },
-                                    enabled = folder.id in state.dockFolders || state.dockApps.size + state.dockFolders.size < state.prefs.dock.maxItems)
-                                Text("Dock", fontSize = 12.sp)
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Infinite navigation: ${if (navigation.infinite) "ON" else "OFF"}") },
+                            onClick = {
+                                update { current ->
+                                    current.copy(prefs = current.prefs.copy(navigation = current.prefs.navigation.copy(
+                                        infinite = !navigation.infinite
+                                    )))
+                                }
+                                showMoreMenu = false
                             }
+                        )
+                        HorizontalDivider()
+                        navigationPresets.forEach { (name, screens) ->
+                            DropdownMenuItem(
+                                text = { Text("Preset: $name") },
+                                onClick = {
+                                    update { current ->
+                                        current.copy(prefs = current.prefs.copy(navigation = current.prefs.navigation.copy(
+                                            preset = name, enabledScreens = screens + Screen.HOME
+                                        )))
+                                    }
+                                    showMoreMenu = false
+                                }
+                            )
                         }
                     }
+        }
+                FilledTonalButton(
+                    onClick = { advanced = !advanced },
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(if (advanced) "Advanced Mode" else "Normal Mode", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
-            }
-        } else LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-            item {
-                SectionLabel("${keys.size} selected · $capacity visible slots")
-                Text("Use the arrows to arrange your apps. ${if (tab == 2) "Pinned apps appear before frequently used apps." else "Folders can be added from the Folders tab."}", fontSize = 12.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (keys.size > capacity) Text("${keys.size - capacity} apps exceed the current layout. Increase its capacity or remove entries.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-                Spacer(Modifier.height(12.dp))
-            }
-            items(keys, key = { it }) { key ->
-                val app = apps.find { it.key == key }
-                val index = keys.indexOf(key)
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (app != null) AppIcon(app, repository, state, 35) else Icon(Icons.Rounded.BrokenImage, null)
-                    Text(if (app != null) state.overrides[key]?.label?.ifBlank { app.label } ?: app.label else "Unavailable application", fontSize = 12.sp, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                    IconButton(onClick = { update { current ->
-                        val list = selected(current).toMutableList(); val i = list.indexOf(key)
-                        if (i > 0) { list.removeAt(i); list.add(i - 1, key) }
-                        replace(current, list)
-                    } }, enabled = index > 0, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.KeyboardArrowUp, "Move earlier", modifier = Modifier.size(19.dp)) }
-                    IconButton(onClick = { update { current ->
-                        val list = selected(current).toMutableList(); val i = list.indexOf(key)
-                        if (i >= 0 && i < list.lastIndex) { list.removeAt(i); list.add(i + 1, key) }
-                        replace(current, list)
-                    } }, enabled = index < keys.lastIndex, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.KeyboardArrowDown, "Move later", modifier = Modifier.size(19.dp)) }
-                    IconButton(onClick = { update { replace(it, selected(it) - key) } }, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.RemoveCircleOutline, "Remove application", modifier = Modifier.size(19.dp)) }
+
+                TextButton(onClick = {
+                    update { current ->
+                        current.copy(prefs = current.prefs.copy(navigation = NavigationPrefs()))
+                    }
+                }) {
+                    Icon(Icons.Rounded.RotateLeft, "Reset layout", modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Reset", fontSize = 12.sp)
                 }
-            }
-            item {
-                SectionLabel("Add applications")
-                LauncherSearchField(filter, { filter = it }, "Filter applications", {}, null, state.prefs.appearance.search)
-                Spacer(Modifier.height(12.dp))
-            }
-            items(apps.filter { it.key !in keys && it.label.contains(filter, true) }, key = { "add:${it.key}" }) { app ->
-                Row(Modifier.fillMaxWidth().clickable(enabled = keys.size < capacity) { update { replace(it, (selected(it) + app.key).distinct()) } }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AppIcon(app, repository, state, 35)
-                    Text(app.label, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp).weight(1f))
-                    Icon(Icons.Rounded.AddCircleOutline, "Add application", tint = if (keys.size < capacity) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .3f), modifier = Modifier.size(20.dp))
+    }
+}
+}
+
+@Composable
+private fun ScreenCard(
+    screen: Screen,
+    title: String,
+    icon: ImageVector,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    isCenter: Boolean = false
+) {
+    Column(
+        modifier = Modifier.size(110.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Surface(
+            modifier = Modifier
+                .size(92.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .border(BorderStroke(1.dp, CardBorder)),
+            color = if (enabled) FrostedGlass else Color(0x40222222),
+            contentColor = Color.White
+        ) {
+            Icon(icon, null, modifier = Modifier.size(40.dp), tint = if (enabled) Color.White else Color.White.copy(alpha = .4f))
+        }
+        if (!isCenter) {
+            Box(
+                modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                IconButton(
+                    onClick = { onToggle(!enabled) },
+                    modifier = Modifier.size(24.dp).background(RedBadge, CircleShape)
+                ) {
+                    Icon(Icons.Rounded.Close, null, tint = Color.White, modifier = Modifier.size(14.dp))
                 }
             }
         }
-    }
-    if (editingFolder != null) {
-        val edited = editingFolder!!
-        FolderEditor(edited, apps, { saved ->
-            update { it.copy(folders = it.folders.filterNot { item -> item.id == saved.id } + saved) }
-            editingFolder = null
-        }, { editingFolder = null })
+        Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

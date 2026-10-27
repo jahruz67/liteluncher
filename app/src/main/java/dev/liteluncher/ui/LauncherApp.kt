@@ -241,8 +241,8 @@ fun LauncherApp(
                 else -> baseScheme.surface
             })
 
-        // Background Blur & Scrim: Entering Search or Screen Manager applies a real-time Gaussian blur and 50% black scrim (#80000000)
-        val shouldBlur = manager.current == Screen.SEARCH || panel == "screens"
+        // Background Scrim: Entering Search or Screen Manager applies a dark translucent scrim (#B3000000)
+        val shouldScrim = manager.current == Screen.SEARCH || panel == "screens"
 
         MaterialTheme(colorScheme = workspaceScheme) {
         CompositionLocalProvider(LocalContentColor provides foreground) {
@@ -251,15 +251,14 @@ fun LauncherApp(
 
             Box(
                 Modifier.fillMaxSize()
-                    .then(if (shouldBlur) Modifier.blur(20.dp) else Modifier)
                     .background(Brush.linearGradient(gradient))
             ) {
                 if (launcherSurface != SurfaceTheme.GLASS) Box(Modifier.fillMaxSize().background(surfaceColor(launcherSurface, MaterialTheme.colorScheme.primary)))
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = state.prefs.appearance.dim)))
 
-                // 50% black scrim (#80000000) when Search or Screen Manager is active
-                if (shouldBlur) {
-                    Box(Modifier.fillMaxSize().background(Color(0x80000000)))
+                // 70% black scrim (#B3000000) when Search or Screen Manager is active
+                if (shouldScrim) {
+                    Box(Modifier.fillMaxSize().background(Color(0xB3000000)))
                 }
 
                 // Ghosted Clock Watermark: When fading into Favorites or Search, retain the Home screen’s Date & Time header as stationary background layer at ~25% opacity
@@ -312,17 +311,6 @@ fun LauncherApp(
                     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).then(gestureModifier).nestedScroll(nestedScroll)) {
                         if (storageError != null) Text(storageError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
                             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
-
-                        Row(Modifier.fillMaxWidth().padding(start = 23.dp, end = 15.dp, top = 8.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Row(Modifier.weight(1f).clickable { panel = "screens" }, verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(6.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Lite Luncher", fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                                Text("  /  ${manager.current.title.lowercase()}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            IconButton(onClick = { navigate(Screen.SEARCH) }) { Icon(Icons.Rounded.Search, "Search", modifier = Modifier.size(21.dp)) }
-                            IconButton(onClick = { panel = "settings" }) { Icon(Icons.Rounded.Tune, "Launcher settings", modifier = Modifier.size(20.dp)) }
-                        }
 
                         // Directional Asymmetry Transitions:
                         // - Horizontal Swipes: 1:1 slide physics with spring-damping between Desktop, Home, Apps
@@ -456,12 +444,11 @@ fun LauncherApp(
                             }
                         }
 
-                        if (state.prefs.behavior.borders) WorkspaceNavigation(manager.current, state.prefs.navigation, navigate)
-                        else Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(8.dp))
                     }
 
                     // Scalloped Pod Architecture: Dock icons sit inside individual, solid white (#FFFFFF) curved pods
-                    val dockShown = state.prefs.dock.enabled && manager.current != Screen.SEARCH && dockAwake && !(scrolling && state.prefs.dock.hideOnScroll)
+                    val dockShown = state.prefs.dock.enabled && manager.current != Screen.SEARCH && manager.current != Screen.APPS && dockAwake && !(scrolling && state.prefs.dock.hideOnScroll)
                     AnimatedVisibility(
                         visible = dockShown,
                         enter = fadeIn() + slideInHorizontally { if (state.prefs.dock.side == "Left") -it else it },
@@ -564,27 +551,9 @@ fun LauncherApp(
     }
 }
 
-@Composable
-private fun WorkspaceNavigation(current: Screen, prefs: NavigationPrefs, navigate: (Screen) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Screen.entries.filter { it in prefs.enabledScreens || it == Screen.HOME }.sortedBy { when (it) {
-            Screen.DESKTOP -> 0; Screen.HOME -> 1; Screen.APPS -> 2; Screen.SEARCH -> 3; Screen.FAVORITES -> 4
-        } }.forEach { screen ->
-            val selected = screen == current
-            val icon = when (screen) { Screen.HOME -> Icons.Rounded.Home; Screen.SEARCH -> Icons.Rounded.Search; Screen.APPS -> Icons.Rounded.Apps; Screen.DESKTOP -> Icons.Rounded.Widgets; Screen.FAVORITES -> Icons.Rounded.StarOutline }
-            IconButton(onClick = { navigate(screen) }, modifier = Modifier.weight(1f)) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(icon, screen.title, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .6f), modifier = Modifier.size(19.dp))
-                    Spacer(Modifier.height(5.dp))
-                    Box(Modifier.size(3.dp).background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape))
-                }
-            }
-        }
-    }
-}
 
 /** Scalloped Pods: Dock icons sit inside individual, solid white (#FFFFFF) curved pods
- * that extend horizontally from the display edge with an ~8dp vertical gap between pods */
+ * that project horizontally from the display edge with an 8dp vertical gap between pods */
 @Composable
 private fun FloatingDock(
     state: LauncherState,
@@ -594,49 +563,53 @@ private fun FloatingDock(
     actions: WorkspaceActions
 ) {
     val prefs = state.prefs.dock
-    val theme = state.prefs.appearance.dock
     val isRight = prefs.side == "Right"
     val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }.take(prefs.maxItems)
     val folders = state.dockFolders.mapNotNull { id -> state.folders.find { it.id == id } }.take((prefs.maxItems - entries.size).coerceAtLeast(0))
     val dockWidth = (48 * prefs.iconScale + 24).dp.coerceAtLeast(64.dp)
 
     BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth + 16.dp).windowInsetsPadding(WindowInsets.safeDrawing)) {
-        val totalItems = entries.size + folders.size + (if (prefs.allApps) 1 else 0)
-        val estimatedHeight = (totalItems.coerceAtLeast(1) * (48 * prefs.iconScale + 14) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
+        val totalItems = entries.size + folders.size
+        val estimatedHeight = (totalItems.coerceAtLeast(1) * (48 * prefs.iconScale + 20) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
         val top = if (prefs.fullWidth) 12.dp else ((maxHeight - estimatedHeight) * prefs.alignment).coerceAtLeast(0.dp)
-        Surface(
+
+        Column(
             modifier = Modifier
                 .padding(start = if (!isRight) 8.dp else 0.dp, end = if (isRight) 8.dp else 0.dp)
                 .offset(y = top)
                 .width(dockWidth)
                 .then(if (prefs.fullWidth) Modifier.fillMaxHeight().padding(vertical = 12.dp) else Modifier),
-            color = surfaceColor(theme, MaterialTheme.colorScheme.primary),
-            contentColor = surfaceContent(theme),
-            shape = RoundedCornerShape(28.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, surfaceContent(theme).copy(alpha = .08f)),
-            shadowElevation = 8.dp
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(
-                Modifier
-                    .heightIn(max = (maxHeight - top - 8.dp).coerceAtLeast(1.dp))
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 5.dp, vertical = prefs.padding.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = if (prefs.fullWidth) Arrangement.SpaceEvenly else Arrangement.spacedBy(3.dp)
-            ) {
-                val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, spacing = 4)
-                entries.forEach { app ->
-                    AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth())
+            val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, spacing = 4)
+            entries.forEach { app ->
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Surface(
+                        color = Color.White,
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier.size(48.dp),
+                        shadowElevation = 4.dp
+                    ) {
+                        AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxSize())
+                    }
                 }
-                folders.forEach { item ->
-                    FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) }, { actions.manageLayout() }, Modifier.fillMaxWidth())
-                }
-                if (entries.isNotEmpty() || folders.isNotEmpty()) {
-                    HorizontalDivider(Modifier.width(25.dp).padding(vertical = 5.dp), color = surfaceContent(theme).copy(alpha = .12f))
-                }
-                if (prefs.allApps) {
-                    IconButton(onClick = { actions.navigate(Screen.APPS) }, modifier = Modifier.size(44.dp)) {
-                        Icon(Icons.Rounded.Apps, "All applications", tint = surfaceContent(theme), modifier = Modifier.size(23.dp))
+            }
+            folders.forEach { item ->
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Surface(
+                        color = Color.White,
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier.size(48.dp),
+                        shadowElevation = 4.dp
+                    ) {
+                        FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) }, { actions.manageLayout() }, Modifier.fillMaxSize())
                     }
                 }
             }
