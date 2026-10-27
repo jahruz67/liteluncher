@@ -126,7 +126,7 @@ fun AppContextDialog(
                         fontSize = 10.sp,
                         letterSpacing = 1.sp,
                         color = Color.Gray,
-                        modifier = Modifier.padding(horizontal = 16.dp, top = 8.dp, bottom = 4.dp)
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
                     )
                     LazyColumn(Modifier.heightIn(max = 240.dp)) {
                         items(shortcuts, key = { it.id }) { shortcut ->
