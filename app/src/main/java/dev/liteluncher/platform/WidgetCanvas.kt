@@ -252,19 +252,14 @@ fun WidgetCanvas(
                                     }
                             )
 
-                            // Done button for resize
-                            IconButton(
-                                onClick = { resizingWidgetId = null },
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .offset(4.dp, (-14).dp)
-                                    .size(24.dp)
-                                    .background(CyanHandle, CircleShape)
-                            ) {
-                                Icon(Icons.Rounded.Check, "Done resizing", tint = Color.Black, modifier = Modifier.size(16.dp))
-                            }
+
                         }
                     }
+                }
+
+                // Tap outside widget bounds to confirm and exit resize mode
+                if (resizingWidgetId != null) {
+                    Box(Modifier.fillMaxSize().clickable { resizingWidgetId = null })
                 }
             }
         }

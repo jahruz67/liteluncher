@@ -79,7 +79,6 @@ fun SearchScreen(
     val clipboard = LocalClipboardManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
-    var engines by remember { mutableStateOf(false) }
     val search = query.trim()
 
     val matches = remember(apps, search, prefs.apps, prefs.hiddenApps, prefs.grid.rows, prefs.grid.columns, state.hiddenApps, state.overrides) {
@@ -135,38 +134,34 @@ fun SearchScreen(
             Spacer(Modifier.height(4.dp))
         }
 
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box {
-                TextButton(onClick = { engines = true }, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                    SearchEngineLogo(prefs.engine, Modifier.size(18.dp))
-                    Text("  ${prefs.engine.displayName()}", fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                    Icon(Icons.Rounded.ExpandMore, null, modifier = Modifier.size(15.dp))
-                }
-                DropdownMenu(expanded = engines, onDismissRequest = { engines = false }) {
-                    WebEngine.entries.forEach { engine ->
-                        DropdownMenuItem(
-                            leadingIcon = { SearchEngineLogo(engine, Modifier.size(20.dp)) },
-                            text = { Text(engine.displayName()) },
-                            onClick = {
-                                actions.update { it.copy(prefs = it.prefs.copy(search = it.prefs.search.copy(engine = engine))) }
-                                engines = false
-                            }
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            Text("ON YOUR DEVICE", fontSize = 8.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
 
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
             if (search.isBlank()) {
                 if (prefs.history && state.history.isNotEmpty()) item {
                     SectionLabel("Recent searches", "Clear", { actions.update { it.copy(history = emptyList()) } })
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        state.history.take(12).forEach { recent ->
-                            SuggestionChip(onClick = { onQuery(recent) }, label = { Text(recent, fontSize = 12.sp, maxLines = 1) },
-                                icon = { Icon(Icons.Rounded.History, null, modifier = Modifier.size(14.dp)) })
+                    items(state.history.take(12), key = { it }) { recent ->
+                        val app = apps.firstOrNull {
+                            (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(recent, true)
+                                || it.key.contains(recent, true)
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp)
+                                .clickable { onQuery(recent) }
+                                .clip(RoundedCornerShape(12.dp)),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (app != null) {
+                                AppIcon(app, repository, state, 40)
+                            } else {
+                                Icon(Icons.Rounded.History, null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .6f))
+                            }
+                            Text(
+                                text = app?.let { state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label } ?: recent,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(start = 12.dp).weight(1f)
+                            )
                         }
                     }
                 }

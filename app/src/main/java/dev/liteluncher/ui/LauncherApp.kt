@@ -52,7 +52,9 @@ import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
 import dev.liteluncher.settings.ScreenManagerScreen
 import dev.liteluncher.settings.SettingsScreen
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -81,6 +83,9 @@ fun LauncherApp(
     val storageError by model.store.error.collectAsStateWithLifecycle()
     val apps by model.apps.apps.collectAsStateWithLifecycle()
     val badges by LauncherNotificationService.counts.collectAsStateWithLifecycle()
+    var pagerOffset by remember { mutableFloatStateOf(0f) }
+    var pagerTarget by remember { mutableStateOf<Screen?>(null) }
+    var pagerAnimating by remember { mutableBooleanStateOf(false) }
     val context = LocalContext.current
     val activity = context as Activity
     val view = LocalView.current
@@ -262,18 +267,7 @@ fun LauncherApp(
                 }
 
                 // Ghosted Clock Watermark: When fading into Favorites or Search, retain the Home screen’s Date & Time header as stationary background layer at ~25% opacity
-                if (manager.current == Screen.SEARCH || manager.current == Screen.FAVORITES) {
-                    Box(
-                        Modifier.fillMaxSize()
-                            .windowInsetsPadding(WindowInsets.safeDrawing)
-                            .padding(horizontal = state.prefs.home.padding.dp)
-                    ) {
-                        Box(Modifier.alpha(0.25f)) {
-                            ClockHeader(state.prefs.clock)
-                        }
-                    }
-                }
-
+                
                 if (!ready) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Cerulean) }
                 } else if (panel.isNotEmpty()) {
@@ -292,21 +286,51 @@ fun LauncherApp(
                     }
                     }
                 } else {
-                    val dockSpace = if (state.prefs.dock.enabled && manager.current != Screen.SEARCH) (maxOf(64f, 48 * state.prefs.dock.iconScale + 20) + 12).dp else 0.dp
-                    val gestureModifier = Modifier.launcherGestures(state.prefs.navigation.fingers, manager.current == Screen.HOME,
-                        onSwipe = { direction, count ->
-                            val gesture = when (direction) {
-                                Direction.UP -> if (count >= 2) Gesture.TWO_UP else Gesture.SWIPE_UP
-                                Direction.DOWN -> if (count >= 2) Gesture.TWO_DOWN else Gesture.SWIPE_DOWN
-                                Direction.LEFT -> if (count >= 2) Gesture.TWO_LEFT else Gesture.SWIPE_LEFT
-                                Direction.RIGHT -> if (count >= 2) Gesture.TWO_RIGHT else Gesture.SWIPE_RIGHT
+                    val dockSpace = if (state.prefs.dock.enabled && manager.current != Screen.SEARCH && manager.current != Screen.APPS) (maxOf(64f, 48 * state.prefs.dock.iconScale + 20) + 12).dp else 0.dp
+                    val scope = rememberCoroutineScope()
+                    val gestureModifier = Modifier.pagerGesture(
+                        onTranslate = { deltaX ->
+                            if (!pagerAnimating) pagerOffset += deltaX
+                        },
+                        onFling = { velocityX, totalDx ->
+                            pagerAnimating = true
+                            val threshold = 100f * density
+                            val significant = velocityX.abs() > 500f || totalDx.abs() > threshold
+                            if (significant) {
+                                val direction = if (velocityX > 0 || totalDx > 0) Direction.LEFT else Direction.RIGHT
+                                manager.swipe(direction, state.prefs.navigation)
+                                dockWakeSignal++
                             }
-                            val binding = state.prefs.gestures[gesture] ?: defaultGestures()[gesture] ?: GestureBinding()
-                            if (binding.action == Action.NAVIGATE) {
-                                if (count >= state.prefs.navigation.fingers) manager.swipe(direction, state.prefs.navigation)
-                            } else perform(binding)
-                            dockWakeSignal++
-                        }, onPinch = { inward -> perform(state.prefs.gestures[if (inward) Gesture.PINCH_IN else Gesture.PINCH_OUT] ?: GestureBinding()) })
+                            scope.launch {
+                                val start = pagerOffset
+                                val startTime = System.currentTimeMillis()
+                                val duration = 280L
+                                while (true) {
+                                    val elapsed = (System.currentTimeMillis() - startTime).toFloat()
+                                    val t = (elapsed / duration).coerceIn(0f, 1f)
+                                    val eased = 1f - kotlin.math.exp(-4f * t) * kotlin.math.cos(8f * t)
+                                    pagerOffset = start * (1f - eased)
+                                    if (t >= 1f) break
+                                    delay(16)
+                                }
+                                pagerOffset = 0f
+                                pagerAnimating = false
+                            }
+                        },
+                        onVerticalSwipe = { direction ->
+                            when {
+                                manager.current == Screen.HOME && direction == Direction.UP ->
+                                    manager.navigate(Screen.FAVORITES, state.prefs.navigation)
+                                manager.current == Screen.FAVORITES && direction == Direction.DOWN ->
+                                    manager.navigate(Screen.HOME, state.prefs.navigation)
+                                manager.current == Screen.HOME && direction == Direction.DOWN ->
+                                    manager.navigate(Screen.SEARCH, state.prefs.navigation)
+                                manager.current == Screen.SEARCH && direction == Direction.UP ->
+                                    manager.navigate(Screen.HOME, state.prefs.navigation)
+                                else -> Unit
+                            }
+                        }
+                    )
 
                     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).then(gestureModifier).nestedScroll(nestedScroll)) {
                         if (storageError != null) Text(storageError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
@@ -331,10 +355,12 @@ fun LauncherApp(
                             },
                             label = "Directional workspace"
                         ) { screen ->
-                            Box(Modifier.fillMaxSize().padding(
-                                start = if (state.prefs.dock.side == "Left") dockSpace else 0.dp,
-                                end = if (state.prefs.dock.side == "Right") dockSpace else 0.dp
-                            )) {
+                            Box(Modifier.fillMaxSize()
+                                .offset(x = pagerOffset.dp)
+                                .padding(
+                                    start = if (state.prefs.dock.side == "Left") dockSpace else 0.dp,
+                                    end = if (state.prefs.dock.side == "Right") dockSpace else 0.dp
+                                )) {
                                 when (screen) {
                                     Screen.HOME -> HomeScreen(
                                         state = state,
@@ -414,17 +440,18 @@ fun LauncherApp(
                                             )
                                         }
 
-                                        // Centered floating + Add Widget capsule button at the bottom of the canvas
-                                        ExtendedFloatingActionButton(
-                                            onClick = { widgetPicker = true },
-                                            containerColor = MaterialTheme.colorScheme.primary,
-                                            contentColor = Ink,
-                                            shape = RoundedCornerShape(24.dp),
-                                            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("Add Widget", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        if (pageWidgets.isEmpty()) {
+                                            ExtendedFloatingActionButton(
+                                                onClick = { widgetPicker = true },
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = Ink,
+                                                shape = RoundedCornerShape(24.dp),
+                                                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
+                                            ) {
+                                                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                Spacer(Modifier.width(8.dp))
+                                                Text("Add Widget", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                            }
                                         }
                                     }
                                 }
@@ -458,13 +485,6 @@ fun LauncherApp(
                         FloatingDock(state, apps, model.apps, badges, actions)
                     }
 
-                    if (state.prefs.dock.enabled && !dockShown && manager.current != Screen.SEARCH) {
-                        Box(
-                            Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)
-                                .width(16.dp).height(100.dp).clickable { dockWakeSignal++ }.padding(horizontal = 5.dp)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = .55f), RoundedCornerShape(8.dp))
-                        )
-                    }
 
                     // Drag and Drop destination capsule
                     if (dragDestinationCapsule != null) {

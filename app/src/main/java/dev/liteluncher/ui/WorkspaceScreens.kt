@@ -100,20 +100,22 @@ fun HomeScreen(
         if (selected.isEmpty() && folders.isEmpty() && state.shortcuts.isEmpty()) {
             EmptyCard(Icons.Rounded.Home, "A home of your own", "Choose your everyday apps and arrange them just how you like.", "Add apps", actions.manageLayout)
         } else {
+            val slotCount = prefs.rows * prefs.columns
+            val filledSlots = selected.size + folders.size + state.shortcuts.size
             LazyVerticalGrid(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
                 modifier = Modifier.weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(prefs.spacing.dp.coerceAtMost(24.dp)),
                 verticalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp)
             ) {
-                items(selected.take(prefs.rows * prefs.columns), key = { it.key }) { app ->
+                items(selected.take(slotCount), key = { it.key }) { app ->
                     if (prefs.listMode) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs)
                     else AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth())
                 }
-                items(folders.take((prefs.rows * prefs.columns - selected.size).coerceAtLeast(0)), key = { "folder:${it.id}" }) { folder ->
+                items(folders.take((slotCount - selected.size).coerceAtLeast(0)), key = { "folder:${it.id}" }) { folder ->
                     FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, actions.manageLayout, Modifier.fillMaxWidth())
                 }
-                items(state.shortcuts.take((prefs.rows * prefs.columns - selected.size - folders.size).coerceAtLeast(0)), key = { "shortcut:${it.packageName}:${it.id}:${it.userSerial}" }) { shortcut ->
+                items(state.shortcuts.take((slotCount - selected.size - folders.size).coerceAtLeast(0)), key = { "shortcut:${it.packageName}:${it.id}:${it.userSerial}" }) { shortcut ->
                     val user = requireNotNull(context.getSystemService(android.os.UserManager::class.java)).getUserForSerialNumber(shortcut.userSerial)
                     val app = apps.firstOrNull { it.packageName == shortcut.packageName && it.user == user }
                     Column(
@@ -130,6 +132,9 @@ fun HomeScreen(
                         }
                         if (prefs.labels) Text(shortcut.label, fontSize = 11.sp, maxLines = if (prefs.multiline) 2 else 1, modifier = Modifier.padding(top = 8.dp))
                     }
+                }
+                repeat((slotCount - filledSlots.coerceAtLeast(0)).coerceAtLeast(0)) {
+                    Box(Modifier.fillMaxWidth().aspectRatio(1f))
                 }
             }
         }
@@ -204,18 +209,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                 }
             }
         } else {
-            // Digital clock with geometric sans-serif, 4dp shadow, superscript AM/PM at 50% cap-height
-            if (prefs.showDay) {
-                Text(
-                    text = now.format(DateTimeFormatter.ofPattern("EEEE", Locale.getDefault())),
-                    color = color.copy(alpha = .75f),
-                    fontSize = (15 * textScale).sp,
-                    fontFamily = font,
-                    fontWeight = FontWeight.Light,
-                    style = TextStyle(shadow = clockShadow),
-                    modifier = Modifier.clickable { SystemActions.open(context, Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)) }
-                )
-            }
+            // Digital clock: Line 1 = time + AM/PM superscript, Line 2 = date
             Row(
                 verticalAlignment = Alignment.Top,
                 modifier = Modifier.clickable(onClick = onClockClick)
@@ -232,7 +226,6 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                     style = TextStyle(shadow = clockShadow)
                 )
                 if (!prefs.use24Hour) {
-                    // Superscript AM/PM at 50% cap-height
                     Text(
                         text = now.format(DateTimeFormatter.ofPattern("a")),
                         color = color.copy(alpha = .7f),
@@ -244,19 +237,18 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                     )
                 }
             }
-        }
 
-        if (prefs.showDate) {
-            val datePattern = if (prefs.showYear) "MMMM d, yyyy" else "MMMM d"
-            Text(
-                text = now.format(DateTimeFormatter.ofPattern(datePattern, Locale.getDefault())),
-                color = color,
-                fontSize = (13 * textScale).sp,
-                fontFamily = font,
-                letterSpacing = 1.sp,
-                style = TextStyle(shadow = clockShadow),
-                modifier = Modifier.clickable { onClockClick() }
-            )
+            if (prefs.showDate) {
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("MMMM d", Locale.getDefault())),
+                    color = Color(0xC0FFFFFF),
+                    fontSize = (13 * textScale).sp,
+                    fontFamily = font,
+                    letterSpacing = 1.sp,
+                    style = TextStyle(shadow = clockShadow),
+                    modifier = Modifier.clickable { onClockClick() }
+                )
+            }
         }
     }
 }

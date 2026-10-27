@@ -1,9 +1,10 @@
 package dev.liteluncher.ui
 
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -48,6 +49,46 @@ class ScreenManager(initial: Screen = Screen.HOME) {
             save = { it.current.name },
             restore = { ScreenManager(runCatching { Screen.valueOf(it) }.getOrDefault(Screen.HOME)) }
         )
+    }
+}
+
+/** Real-time horizontal pager gesture: finger tracks canvas 1:1 (translationX = touchDeltaX),
+ *  fling velocity completes the transition with spring physics on release. */
+@Composable
+fun Modifier.pagerGesture(
+    onTranslate: (Float) -> Unit,
+    onFling: (Float, Float) -> Unit,
+    onVerticalSwipe: (Direction) -> Unit
+): Modifier {
+    val translateAction by rememberUpdatedState(onTranslate)
+    val flingAction by rememberUpdatedState(onFling)
+    val verticalAction by rememberUpdatedState(onVerticalSwipe)
+    return pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+            val start = down.position
+            var lastPos = down.position
+            var finished = false
+            while (!finished) {
+                val event = awaitPointerEvent(PointerEventPass.Final)
+                event.changes.firstOrNull { it.id == down.id }?.let { change ->
+                    if (change.position != change.previousPosition) {
+                        val deltaX = change.position.x - lastPos.x
+                        translateAction(deltaX)
+                        lastPos = change.position
+                    }
+                }
+                finished = event.changes.all { !it.pressed }
+            }
+            val upEvent = event.changes.firstOrNull { it.id == down.id }
+            val totalDx = upEvent?.let { it.position.x - start.x } ?: 0f
+            val velocityX = upEvent?.velocity?.velocity?.x ?: 0f
+            flingAction(velocityX, totalDx)
+            val totalDy = upEvent?.let { it.position.y - start.y } ?: 0f
+            if (abs(totalDy) > abs(totalDx) && abs(totalDy) > 64 * density) {
+                verticalAction(if (totalDy < 0) Direction.UP else Direction.DOWN)
+            }
+        }
     }
 }
 
