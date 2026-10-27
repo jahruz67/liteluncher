@@ -93,7 +93,7 @@ fun HomeScreen(
             Spacer(Modifier.height(32.dp))
         }
 
-        IconButton(onClick = actions.manageLayout, modifier = Modifier.size(32.dp).align(Alignment.TopEnd)) {
+        IconButton(onClick = actions.manageLayout, modifier = Modifier.size(32.dp).align(Alignment.End)) {
             Icon(Icons.Rounded.Add, "Customize home layout", modifier = Modifier.size(18.dp))
         }
 
