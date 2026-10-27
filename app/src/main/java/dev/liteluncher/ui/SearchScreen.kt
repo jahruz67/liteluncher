@@ -129,7 +129,6 @@ fun SearchScreen(
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = prefs.grid.padding.dp).imePadding()) {
-        PageHeader("Find your next thing", "Search", Icons.Rounded.Tune, actions.settings)
 
         if (!prefs.barAtBottom) {
             searchField()

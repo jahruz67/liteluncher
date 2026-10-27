@@ -86,7 +86,7 @@ fun AppContextDialog(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onEdit() }.padding(8.dp)
                     ) {
-                        Icon(Icons.Rounded.Edit, null, tint = Lime, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Rounded.Edit, null, tint = Cerulean, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.height(4.dp))
                         Text("Edit", fontSize = 11.sp)
                     }
@@ -137,7 +137,7 @@ fun AppContextDialog(
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Rounded.Shortcut, null, tint = Lime, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Rounded.Shortcut, null, tint = Cerulean, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(12.dp))
                                 Text(shortcut.label, fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f))
                                 IconButton(
@@ -182,7 +182,7 @@ fun EmptySpaceMenuDialog(
                     text = "Lite Luncher",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 14.sp,
-                    color = Lime,
+                    color = Cerulean,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
                 HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.5.dp)
@@ -211,7 +211,7 @@ private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vect
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = Lime, modifier = Modifier.size(20.dp))
+        Icon(icon, null, tint = Cerulean, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Text(label, fontSize = 14.sp, color = Color.White)
     }
@@ -285,7 +285,7 @@ fun WidgetPicker(controller: WidgetController, onSelect: (android.appwidget.AppW
             modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp)
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Add a widget", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Lime)
+                Text("Add a widget", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Cerulean)
                 Spacer(Modifier.height(10.dp))
                 if (providers.isEmpty()) {
                     Text("No widget providers available.", fontSize = 13.sp, color = Color.Gray, modifier = Modifier.padding(vertical = 24.dp))
@@ -303,7 +303,7 @@ fun WidgetPicker(controller: WidgetController, onSelect: (android.appwidget.AppW
                                             .padding(vertical = 10.dp, horizontal = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Rounded.Widgets, null, tint = Lime, modifier = Modifier.size(18.dp))
+                                        Icon(Icons.Rounded.Widgets, null, tint = Cerulean, modifier = Modifier.size(18.dp))
                                         Spacer(Modifier.width(10.dp))
                                         Text(
                                             text = "$appName: ${appWidgets.size} widget${if (appWidgets.size == 1) "" else "s"}",
@@ -329,7 +329,7 @@ fun WidgetPicker(controller: WidgetController, onSelect: (android.appwidget.AppW
                                                         Text(widgetLabel, fontSize = 13.sp)
                                                         Text("${widget.minWidth} × ${widget.minHeight} dp", fontSize = 10.sp, color = Color.Gray)
                                                     }
-                                                    Icon(Icons.Rounded.Add, null, tint = Lime, modifier = Modifier.size(16.dp))
+                                                    Icon(Icons.Rounded.Add, null, tint = Cerulean, modifier = Modifier.size(16.dp))
                                                 }
                                             }
                                         }

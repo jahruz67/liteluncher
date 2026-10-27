@@ -93,17 +93,8 @@ fun HomeScreen(
             Spacer(Modifier.height(32.dp))
         }
 
-        Row(Modifier.padding(top = 10.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "AT YOUR FINGERTIPS",
-                fontSize = 9.sp,
-                letterSpacing = 2.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = actions.manageLayout, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Rounded.Add, "Customize home layout", modifier = Modifier.size(18.dp))
-            }
+        IconButton(onClick = actions.manageLayout, modifier = Modifier.size(32.dp).align(Alignment.TopEnd)) {
+            Icon(Icons.Rounded.Add, "Customize home layout", modifier = Modifier.size(18.dp))
         }
 
         if (selected.isEmpty() && folders.isEmpty() && state.shortcuts.isEmpty()) {
@@ -135,7 +126,7 @@ fun HomeScreen(
                         Box {
                             if (app != null) AppIcon(app, repository, state, (48 * prefs.iconScale).toInt())
                             else Icon(Icons.Rounded.Shortcut, null, modifier = Modifier.size(48.dp))
-                            Icon(Icons.Rounded.Shortcut, null, tint = Lime, modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).background(Ink, CircleShape))
+                            Icon(Icons.Rounded.Shortcut, null, tint = Cerulean, modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).background(Ink, CircleShape))
                         }
                         if (prefs.labels) Text(shortcut.label, fontSize = 11.sp, maxLines = if (prefs.multiline) 2 else 1, modifier = Modifier.padding(top = 8.dp))
                     }
@@ -155,14 +146,7 @@ fun HomeScreen(
             )
             Spacer(Modifier.height(8.dp))
         } else {
-            Row(
-                Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("A LITTLE LESS. A LITTLE CLOSER.", fontSize = 8.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f))
-                Icon(Icons.Rounded.South, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f), modifier = Modifier.size(15.dp))
-            }
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -216,7 +200,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                         end = Offset((center.x + radius * 0.75f * cos(minuteAngle)).toFloat(), (center.y + radius * 0.75f * sin(minuteAngle)).toFloat()),
                         strokeWidth = 2.dp.toPx()
                     )
-                    drawCircle(color = Lime, radius = 3.dp.toPx(), center = center)
+                    drawCircle(color = Cerulean, radius = 3.dp.toPx(), center = center)
                 }
             }
         } else {
@@ -316,7 +300,6 @@ fun AppDrawer(
 
     Column(Modifier.fillMaxSize().padding(start = prefs.padding.dp, end = 2.dp)) {
         Column(Modifier.padding(end = 16.dp)) {
-            PageHeader("Everything, in its place", "Applications", Icons.Rounded.MoreHoriz, actions.settings)
             // Pinned Search Pill with microphone voice trigger
             LauncherSearchField(filter, { filter = it }, "Find an application", {}, onVoice, state.prefs.appearance.search)
             SectionLabel("${rows.count { it is DrawerRow.App }} installed apps")
@@ -451,7 +434,6 @@ fun FavoritesScreen(
                 Spacer(Modifier.height(8.dp))
             }
         }
-        item { PageHeader("Your everyday essentials", "Favorites", Icons.Rounded.Tune, actions.settings) }
         item { SectionLabel(if (prefs.byUsage) "Most used & pinned" else "Alphabetical favorites", "Arrange", actions.manageLayout) }
         if (favorites.isEmpty()) item { EmptyCard(Icons.Rounded.StarOutline, "Your favorites find you", "Open apps to see your most used here, or long-press any app to pin it.", "Browse applications", { actions.navigate(Screen.APPS) }) }
         else items(favorites.chunked(columns)) { row ->

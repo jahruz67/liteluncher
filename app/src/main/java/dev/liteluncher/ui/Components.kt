@@ -77,7 +77,7 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
     Box(modifier.size(size.dp).clip(shape), contentAlignment = Alignment.Center) {
         if (bitmap != null) Image(bitmap!!.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         else Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {
-            Text(app.label.take(1).uppercase(), color = Lime, fontSize = (size / 2).sp)
+            Text(app.label.take(1).uppercase(), color = Cerulean, fontSize = (size / 2).sp)
         }
     }
 }
@@ -121,7 +121,7 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
         Box(Modifier.size(size).clip(shape)
             .background(folderColor.copy(alpha = folderColor.alpha * state.prefs.folders.opacity)), contentAlignment = Alignment.Center) {
             val members = folder.apps.mapNotNull { key -> apps.find { it.key == key } }.take(4)
-            if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = Lime)
+            if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = Cerulean)
             else if (state.prefs.folders.stacked) {
                 members.take(3).reversed().forEachIndexed { index, app ->
                     AppIcon(app, repository, state, (28 * state.prefs.folders.iconScale).toInt(), Modifier.offset((index * 7 - 7).dp, (index * 5 - 5).dp))
@@ -199,7 +199,7 @@ fun DeletionSnackbar(
                 Spacer(Modifier.width(16.dp))
                 Text(
                     "Undo",
-                    color = Lime,
+                    color = Cerulean,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable(onClick = onUndo)
@@ -250,7 +250,7 @@ fun DestinationCapsule(destination: String, modifier: Modifier = Modifier) {
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Rounded.DriveFileMove, null, tint = Lime, modifier = Modifier.size(16.dp))
+            Icon(Icons.Rounded.DriveFileMove, null, tint = Cerulean, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             Text(destination, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }

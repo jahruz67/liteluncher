@@ -276,7 +276,7 @@ fun LauncherApp(
                 }
 
                 if (!ready) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Lime) }
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Cerulean) }
                 } else if (panel.isNotEmpty()) {
                     MaterialTheme(colorScheme = baseScheme) {
                     CompositionLocalProvider(LocalContentColor provides baseScheme.onSurface) {
@@ -389,8 +389,6 @@ fun LauncherApp(
                                     )
                                     Screen.DESKTOP -> Box(Modifier.fillMaxSize()) {
                                         Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-                                            PageHeader("Your space", "Desktop", Icons.Rounded.Add, { widgetPicker = true })
-
                                             // Multi-page desktop pagination header
                                             val pageCount = state.prefs.desktop.pageCount
                                             if (pageCount > 1) {

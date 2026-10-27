@@ -55,7 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
-internal val SettingsGreen = Color(0xFFC1F17C)
+internal val SettingsGreen = Color(0xFF3B82F6)
 internal val SettingsBackground = Color(0xFF151A17)
 internal val SettingsPanel = Color(0xFF212922)
 
@@ -269,7 +269,7 @@ internal fun ValidatedTextSetting(
 
 internal fun colorError(value: String): String? =
     if (Regex("^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$").matches(value)) null
-    else "Use #RRGGBB or #AARRGGBB, for example #C1F17C."
+    else "Use #RRGGBB or #AARRGGBB, for example #3B82F6."
 
 internal fun settingsColor(value: String, fallback: Color = SettingsGreen): Color =
     runCatching { Color(android.graphics.Color.parseColor(value)) }.getOrDefault(fallback)

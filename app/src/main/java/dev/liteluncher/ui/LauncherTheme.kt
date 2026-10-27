@@ -12,11 +12,11 @@ import dev.liteluncher.data.ThemeMode
 
 val Ink = Color(0xFF131A16)
 val Panel = Color(0xFF202923)
-val Lime = Color(0xFFC1F17C)
+val Cerulean = Color(0xFF3B82F6)
 val Mist = Color(0xFFF1F4EC)
 val Muted = Color(0xFFA7B4A7)
 
-fun parseColor(value: String, fallback: Color = Lime): Color = runCatching {
+fun parseColor(value: String, fallback: Color = Cerulean): Color = runCatching {
     Color(android.graphics.Color.parseColor(value))
 }.getOrDefault(fallback)
 

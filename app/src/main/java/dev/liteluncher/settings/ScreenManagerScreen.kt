@@ -180,7 +180,7 @@ private fun SymmetricalCrossLayout(
     Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
         Canvas(Modifier.matchParentSize()) {
             val center = Offset(size.width / 2f, size.height / 2f)
-            val lineColor = Color(0x33C1F17C)
+            val lineColor = Color(0x663B82F6)
             drawLine(lineColor, Offset(center.x, 24.dp.toPx()), Offset(center.x, size.height - 24.dp.toPx()), strokeWidth = 2.dp.toPx())
             drawLine(lineColor, Offset(24.dp.toPx(), center.y), Offset(size.width - 24.dp.toPx(), center.y), strokeWidth = 2.dp.toPx())
         }

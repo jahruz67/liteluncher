@@ -316,7 +316,7 @@ private fun WidgetContextMenuDialog(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 14.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = Color(0xFFC1F17C)
+                    color = Color(0xFF3B82F6)
                 )
                 HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.5.dp)
 

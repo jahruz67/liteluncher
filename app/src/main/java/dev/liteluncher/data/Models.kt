@@ -107,7 +107,7 @@ data class FavoritesPrefs(
 data class AppearancePrefs(
     val mode: ThemeMode = ThemeMode.DARK, val launcher: SurfaceTheme = SurfaceTheme.GLASS,
     val dock: SurfaceTheme = SurfaceTheme.GLASS, val search: SurfaceTheme = SurfaceTheme.GLASS,
-    val dim: Float = .32f, val accent: String = "#C1F17C", val iconPack: String = "",
+    val dim: Float = .32f, val accent: String = "#3B82F6", val iconPack: String = "",
     val iconShape: IconShape = IconShape.SQUIRCLE, val lightStatusIcons: Boolean = true,
     val lightNavigationIcons: Boolean = true, val darkTexts: Boolean = false,
     val dimMode: String = "Follow Theme", val backgroundColor: String = "#80000000", val forceAdaptive: Boolean = false,
