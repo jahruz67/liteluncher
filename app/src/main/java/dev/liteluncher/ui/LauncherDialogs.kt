@@ -23,7 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.InfoOutline
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Wallpaper
@@ -98,7 +98,7 @@ fun AppContextMenu(
         ) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 ActionRowItem("Edit", Icons.Default.Edit, onEdit)
-                ActionRowItem("App-Info", Icons.Default.InfoOutline, { repository.appInfo(app); onDismiss() })
+                ActionRowItem("App-Info", Icons.Outlined.Info, { repository.appInfo(app); onDismiss() })
                 if (removable) ActionRowItem("Remove", Icons.Default.Close, onRemove)
 
                 if (app.key !in state.homeApps && !state.prefs.home.preventChanges) {
