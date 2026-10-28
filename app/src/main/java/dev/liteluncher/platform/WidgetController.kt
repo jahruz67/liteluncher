@@ -54,6 +54,7 @@ class WidgetController(
     private var cellWidthDp = 80f
     private var cellHeightDp = 80f
     private var layoutItems = emptyList<WidgetItem>()
+    private var currentPage = 0
     private val mutableRefreshes = MutableStateFlow<Map<Int, Int>>(emptyMap())
     internal val refreshes = mutableRefreshes.asStateFlow()
 
@@ -61,7 +62,8 @@ class WidgetController(
         val id: Int,
         val provider: AppWidgetProviderInfo,
         val stage: String,
-        val pin: LauncherApps.PinItemRequest? = null
+        val pin: LauncherApps.PinItemRequest? = null,
+        val location: WidgetItem? = null
     )
 
     private val bindLauncher = activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -106,6 +108,7 @@ class WidgetController(
         }
         activity.savedStateRegistry.registerSavedStateProvider(STATE_KEY) {
             Bundle().apply {
+                putInt("page", currentPage)
                 putInt("columns", columns)
                 putInt("rows", rows)
                 putFloat("cellWidth", cellWidthDp)
@@ -113,12 +116,14 @@ class WidgetController(
                 putIntArray("occupied", layoutItems.flatMap {
                     listOf(it.id, it.column, it.row, it.columns, it.rows)
                 }.toIntArray())
+                putIntArray("occupiedPages", layoutItems.map { it.page }.toIntArray())
                 putParcelable("confirmation", pinConfirmation)
                 pending?.let {
                     putInt("id", it.id)
                     putParcelable("provider", it.provider)
                     putString("stage", it.stage)
                     putParcelable("pin", it.pin)
+                    it.location?.let { location -> putIntArray("location", intArrayOf(location.column, location.row, location.page)) }
                 }
             }
         }
@@ -135,11 +140,11 @@ class WidgetController(
         }
     }.getOrDefault(emptyList())
 
-    fun add(provider: AppWidgetProviderInfo) {
-        beginAdd(provider, null)
+    fun add(provider: AppWidgetProviderInfo, location: WidgetItem? = null) {
+        beginAdd(provider, null, location)
     }
 
-    private fun beginAdd(provider: AppWidgetProviderInfo, pin: LauncherApps.PinItemRequest?) {
+    private fun beginAdd(provider: AppWidgetProviderInfo, pin: LauncherApps.PinItemRequest?, location: WidgetItem? = null) {
         restorePending()
         if (closed) return
         if (pending != null || pinDialog != null) {
@@ -150,7 +155,7 @@ class WidgetController(
             SystemActions.error(activity, "Widgets are available only from your unlocked current profile.")
             return
         }
-        if (placement(AppWidgetManager.INVALID_APPWIDGET_ID, provider) == null) {
+        if (placement(AppWidgetManager.INVALID_APPWIDGET_ID, provider, location) == null) {
             SystemActions.error(activity, "There is no free space for this widget. Move or remove a widget first.")
             return
         }
@@ -162,7 +167,7 @@ class WidgetController(
             SystemActions.error(activity, "This device does not support hosting widgets.")
             return
         }
-        pending = Pending(id, provider, BINDING, pin)
+        pending = Pending(id, provider, BINDING, pin, location ?: WidgetItem(id, page = currentPage))
         journal.edit().putInt("id", id).apply()
         val bound = runCatching {
             manager.bindAppWidgetIdIfAllowed(id, provider.profile, provider.provider, widgetOptions())
@@ -208,7 +213,7 @@ class WidgetController(
             cancelPending()
             return
         }
-        val item = placement(current.id, info)
+        val item = placement(current.id, info, current.location)
         if (item == null) {
             cancelPending()
             SystemActions.error(activity, "There is no free grid space for this widget.")
@@ -247,7 +252,7 @@ class WidgetController(
             !users.isQuietModeEnabled(provider.profile)
     }.getOrDefault(false)
 
-    private fun placement(id: Int, info: AppWidgetProviderInfo): WidgetItem? {
+    internal fun placement(id: Int, info: AppWidgetProviderInfo, location: WidgetItem? = null): WidgetItem? {
         val density = activity.resources.displayMetrics.density
         val padding = AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
         val width = ceil((info.minWidth + padding.left + padding.right) / density / cellWidthDp).toInt().coerceAtLeast(1)
@@ -256,14 +261,16 @@ class WidgetController(
         val desiredRows = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && info.targetCellHeight > 0) info.targetCellHeight else height
         val minimum = minimumSpan(info)
         if (minimum.first > columns || minimum.second > rows) return null
-        val occupied = WidgetGrid.arrange(layoutItems, columns, rows)
+        val page = location?.page ?: currentPage
+        val occupied = WidgetGrid.arrange(layoutItems.filter { it.page == page }, columns, rows)
         if (occupied.overflow.isNotEmpty()) return null
         val maximum = maximumSpan(info)
         val maxColumns = desiredColumns.coerceIn(minimum.first, maximum.first)
         val maxRows = desiredRows.coerceIn(minimum.second, maximum.second)
         for (rowSpan in maxRows downTo minimum.second) {
             for (columnSpan in maxColumns downTo minimum.first) {
-                val candidate = WidgetGrid.place(WidgetItem(id, columns = columnSpan, rows = rowSpan),
+                val candidate = WidgetGrid.place(WidgetItem(id, column = location?.column ?: 0, row = location?.row ?: 0,
+                    columns = columnSpan, rows = rowSpan, page = page),
                     occupied.placed, columns, rows)
                 if (candidate != null) return candidate
             }
@@ -297,10 +304,11 @@ class WidgetController(
     }
 
     /** Seed this when opening a picker before WidgetCanvas has ever been composed. */
-    fun updateLayout(prefs: DesktopPrefs, widgets: List<WidgetItem>) {
+    fun updateLayout(prefs: DesktopPrefs, widgets: List<WidgetItem>, page: Int = currentPage) {
         columns = prefs.columns.coerceIn(1, 24)
         rows = prefs.rows.coerceIn(1, 32)
         layoutItems = widgets.distinctBy { it.id }
+        currentPage = page.coerceIn(0, prefs.pageCount.coerceAtLeast(1) - 1)
     }
 
     internal fun syncLayout(prefs: DesktopPrefs, items: List<WidgetItem>, widthDp: Float, heightDp: Float) {
@@ -334,7 +342,22 @@ class WidgetController(
         }
     }
 
+    fun deferRemoval(id: Int) {
+        journal.edit().putStringSet("removed", journal.getStringSet("removed", emptySet()).orEmpty() + id.toString()).apply()
+    }
+
+    fun finishRemovals(activeIds: Set<Int>) {
+        journal.getStringSet("removed", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.forEach { id ->
+            if (id in activeIds) cancelRemoval(id) else remove(id)
+        }
+    }
+
+    fun cancelRemoval(id: Int) {
+        journal.edit().putStringSet("removed", journal.getStringSet("removed", emptySet()).orEmpty() - id.toString()).apply()
+    }
+
     fun remove(id: Int) {
+        cancelRemoval(id)
         if (pending?.id == id) cancelPending() else runCatching { host.deleteAppWidgetId(id) }
         layoutItems = layoutItems.filterNot { it.id == id }
         mutableRefreshes.value = mutableRefreshes.value - id
@@ -441,15 +464,17 @@ class WidgetController(
         restored = true
         val bundle = activity.savedStateRegistry.consumeRestoredStateForKey(STATE_KEY)
         if (bundle != null) {
+            currentPage = bundle.getInt("page", currentPage).coerceAtLeast(0)
             columns = bundle.getInt("columns", columns).coerceIn(1, 24)
             rows = bundle.getInt("rows", rows).coerceIn(1, 32)
             cellWidthDp = bundle.getFloat("cellWidth", cellWidthDp).takeIf { it.isFinite() && it > 0 } ?: 80f
             cellHeightDp = bundle.getFloat("cellHeight", cellHeightDp).takeIf { it.isFinite() && it > 0 } ?: 80f
             val occupied = bundle.getIntArray("occupied") ?: intArrayOf()
+            val pages = bundle.getIntArray("occupiedPages") ?: intArrayOf()
             layoutItems = (0 until occupied.size / 5).map { index ->
                 val offset = index * 5
                 WidgetItem(occupied[offset], occupied[offset + 1], occupied[offset + 2],
-                    occupied[offset + 3], occupied[offset + 4])
+                    occupied[offset + 3], occupied[offset + 4], pages.getOrElse(index) { 0 })
             }.filter { it.id > 0 }.distinctBy { it.id }
         }
         val id = bundle?.getInt("id", AppWidgetManager.INVALID_APPWIDGET_ID) ?: AppWidgetManager.INVALID_APPWIDGET_ID
@@ -457,7 +482,10 @@ class WidgetController(
         val stage = bundle?.getString("stage")
         if (id > 0 && info != null && stage in listOf(BINDING, CONFIGURING)) {
             val pin = BundleCompat.getParcelable(requireNotNull(bundle), "pin", LauncherApps.PinItemRequest::class.java)
-            pending = Pending(id, info, requireNotNull(stage), pin)
+            val location = bundle.getIntArray("location")?.takeIf { it.size == 3 }?.let {
+                WidgetItem(id, column = it[0], row = it[1], page = it[2])
+            }
+            pending = Pending(id, info, requireNotNull(stage), pin, location)
         }
         // Confirmed widgets belong exclusively to Pending. Only an unaccepted, still-valid
         // confirmation is eligible for redisplay when acceptPin supplies a fresh callback.

@@ -43,13 +43,22 @@ fun AppContextDialog(
     repository: AppsRepository,
     actions: WorkspaceActions,
     onEdit: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    source: Screen = Screen.HOME,
+    fromDock: Boolean = false,
+    onRemove: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val shortcuts by produceState<List<NativeShortcut>>(emptyList(), app.key) {
         value = withContext(Dispatchers.IO) { repository.shortcuts(app) }
     }
     fun update(block: (LauncherState) -> LauncherState) { actions.update(block); onDismiss() }
+    val removable = when {
+        fromDock -> app.key in state.dockApps && !state.prefs.dock.preventChanges
+        source == Screen.HOME -> app.key in state.homeApps && !state.prefs.home.preventChanges
+        source == Screen.FAVORITES -> app.key in state.favoriteApps
+        else -> false
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -100,22 +109,50 @@ fun AppContextDialog(
                         Text("App-Info", fontSize = 11.sp)
                     }
 
-                    Column(
+                    if (removable) Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
-                            update { current ->
-                                current.copy(
-                                    homeApps = current.homeApps - app.key,
-                                    dockApps = current.dockApps - app.key,
-                                    favoriteApps = current.favoriteApps - app.key
-                                )
-                            }
-                        }.padding(8.dp)
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onRemove).padding(8.dp)
                     ) {
                         Icon(Icons.Rounded.DeleteOutline, null, tint = Color(0xFFFF5252), modifier = Modifier.size(20.dp))
                         Spacer(Modifier.height(4.dp))
                         Text("Remove", fontSize = 11.sp, color = Color(0xFFFF5252))
                     }
+                }
+
+                if (app.key !in state.homeApps && !state.prefs.home.preventChanges) {
+                    ActionRowItem("Add to Home", Icons.Rounded.AddToHomeScreen, {
+                        val full = state.homeApps.size + state.homeFolders.size + state.shortcuts.size >= state.prefs.home.rows * state.prefs.home.columns
+                        if (full) android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
+                        else actions.update { current ->
+                            val capacity = current.prefs.home.rows * current.prefs.home.columns
+                            if (current.prefs.home.preventChanges || current.homeApps.size + current.homeFolders.size + current.shortcuts.size >= capacity) current
+                            else current.copy(homeApps = (current.homeApps + app.key).distinct())
+                        }
+                        onDismiss()
+                    })
+                }
+                if (app.key !in state.dockApps && !state.prefs.dock.preventChanges) {
+                    ActionRowItem("Pin to Dock", Icons.Rounded.Dock, {
+                        val full = state.dockApps.size + state.dockFolders.size >= state.prefs.dock.maxItems
+                        if (full) android.widget.Toast.makeText(context, "Dock is full. Remove an entry or increase its item limit.", android.widget.Toast.LENGTH_SHORT).show()
+                        else actions.update { current ->
+                            if (current.prefs.dock.preventChanges || current.dockApps.size + current.dockFolders.size >= current.prefs.dock.maxItems) current
+                            else current.copy(dockApps = (current.dockApps + app.key).distinct())
+                        }
+                        onDismiss()
+                    })
+                }
+                if (app.key !in state.favoriteApps) {
+                    ActionRowItem("Pin to Favorites", Icons.Rounded.Favorite, {
+                        if (state.favoriteApps.size >= state.prefs.favorites.maxItems) {
+                            android.widget.Toast.makeText(context, "Favorites is full. Increase its item limit in Settings.", android.widget.Toast.LENGTH_SHORT).show()
+                            onDismiss()
+                        } else update { current ->
+                            if (current.favoriteApps.size >= current.prefs.favorites.maxItems) current
+                            else current.copy(favoriteApps = (current.favoriteApps + app.key).distinct(),
+                                prefs = current.prefs.copy(favorites = current.prefs.favorites.copy(excluded = current.prefs.favorites.excluded - app.key)))
+                        }
+                    })
                 }
 
                 // Separated by hairline dividers from bottom Android deep app shortcuts
@@ -258,94 +295,6 @@ fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) 
     }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
-/** Widget Picker: Categorized alphabetically with available counts per app (e.g., Amazon Alexa: 4 widgets) */
-@Composable
-fun WidgetPicker(controller: WidgetController, onSelect: (android.appwidget.AppWidgetProviderInfo) -> Unit, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val providers by produceState<List<android.appwidget.AppWidgetProviderInfo>>(emptyList()) {
-        value = withContext(Dispatchers.IO) { controller.providers() }
-    }
-    val grouped = remember(providers) {
-        providers.groupBy { provider ->
-            runCatching {
-                val pm = context.packageManager
-                val appInfo = pm.getApplicationInfo(provider.provider.packageName, 0)
-                pm.getApplicationLabel(appInfo).toString()
-            }.getOrDefault(provider.provider.packageName)
-        }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
-    }
-    var expandedApp by remember { mutableStateOf<String?>(null) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF282828),
-            contentColor = Color.White,
-            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
-            modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp)
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Add a widget", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Cerulean)
-                Spacer(Modifier.height(10.dp))
-                if (providers.isEmpty()) {
-                    Text("No widget providers available.", fontSize = 13.sp, color = Color.Gray, modifier = Modifier.padding(vertical = 24.dp))
-                } else {
-                    LazyColumn(Modifier.weight(1f)) {
-                        grouped.forEach { (appName, appWidgets) ->
-                            item(key = "group:$appName") {
-                                val isExpanded = expandedApp == appName
-                                Column(Modifier.fillMaxWidth()) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable { expandedApp = if (isExpanded) null else appName }
-                                            .padding(vertical = 10.dp, horizontal = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(Icons.Rounded.Widgets, null, tint = Cerulean, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(10.dp))
-                                        Text(
-                                            text = "$appName: ${appWidgets.size} widget${if (appWidgets.size == 1) "" else "s"}",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        Icon(if (isExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = Color.Gray)
-                                    }
-                                    if (isExpanded) {
-                                        Column(Modifier.fillMaxWidth().padding(start = 28.dp, bottom = 6.dp)) {
-                                            appWidgets.forEach { widget ->
-                                                val widgetLabel = runCatching { widget.loadLabel(context.packageManager) }.getOrDefault(widget.provider.shortClassName)
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clip(RoundedCornerShape(6.dp))
-                                                        .clickable { onSelect(widget) }
-                                                        .padding(vertical = 8.dp, horizontal = 8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Column(Modifier.weight(1f)) {
-                                                        Text(widgetLabel, fontSize = 13.sp)
-                                                        Text("${widget.minWidth} × ${widget.minHeight} dp", fontSize = 10.sp, color = Color.Gray)
-                                                    }
-                                                    Icon(Icons.Rounded.Add, null, tint = Cerulean, modifier = Modifier.size(16.dp))
-                                                }
-                                            }
-                                        }
-                                    }
-                                    HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
-                                }
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Cancel") }
-            }
-        }
-    }
-}
 
 /** Folder Overlay: Docked folders expand outward as a vertical floating fan-out stack */
 @Composable
@@ -369,6 +318,7 @@ fun FolderOverlay(
             val left = state.prefs.dock.side == "Left"
             Column(
                 Modifier.align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
+                    .appDropTarget(AppDropTarget.Folder(folder.id), 4)
                     .padding(start = if (left) 88.dp else 16.dp, end = if (left) 16.dp else 88.dp)
                     .widthIn(max = 260.dp),
                 horizontalAlignment = if (left) Alignment.Start else Alignment.End,
@@ -384,7 +334,6 @@ fun FolderOverlay(
                 members.take(8).forEachIndexed { index, app ->
                     val fan = (kotlin.math.sin((index.toFloat() / (members.size - 1).coerceAtLeast(1)) * Math.PI) * 24).toInt()
                     Surface(
-                        onClick = { actions.launch(app); onDismiss() },
                         color = background,
                         contentColor = folderContent,
                         shape = RoundedCornerShape(22.dp),
@@ -392,7 +341,8 @@ fun FolderOverlay(
                         border = BorderStroke(1.dp, Color(0x22FFFFFF)),
                         modifier = Modifier.offset(x = (if (left) fan else -fan).dp).widthIn(min = 160.dp, max = 240.dp)
                     ) {
-                        Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.appIconGestures(app, null, !state.folderLocked(folder.id), { actions.launch(app); onDismiss() }, { actions.menu(app); onDismiss() }, folder.id)
+                            .padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                             AppIcon(app, repository, state, 36)
                             Text(
                                 state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label,
@@ -409,7 +359,7 @@ fun FolderOverlay(
             }
         } else {
             Surface(
-                Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp).clickable {},
+                Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp).appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
                 color = background,
                 contentColor = folderContent,
                 shape = RoundedCornerShape(28.dp),
@@ -427,7 +377,8 @@ fun FolderOverlay(
                         items(members.chunked(3)) { row ->
                             Row(Modifier.fillMaxWidth()) {
                                 row.forEach { app ->
-                                    AppTile(app, repository, state, state.prefs.home.copy(columns = 3), 0, { actions.launch(app); onDismiss() }, { actions.menu(app) }, Modifier.weight(1f))
+                                    AppTile(app, repository, state, state.prefs.home.copy(columns = 3), 0, { actions.launch(app); onDismiss() }, { actions.menu(app); onDismiss() }, Modifier.weight(1f),
+                                        draggable = !state.folderLocked(folder.id), dragFolderId = folder.id)
                                 }
                                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                             }

@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +72,7 @@ fun HomeScreen(
 
     Column(
         Modifier.fillMaxSize()
+            .appDropTarget(AppDropTarget.Area(LayoutArea.HOME))
             .combinedClickable(onClick = {}, onLongClick = onEmpty, onDoubleClick = onDoubleTap)
             .padding(horizontal = prefs.padding.dp)
     ) {
@@ -101,12 +103,12 @@ fun HomeScreen(
         } else {
             val slotCount = prefs.rows * prefs.columns
             val filledSlots = selected.size + folders.size + state.shortcuts.size
-            val dockInset = if (state.prefs.dock.enabled) (48 * state.prefs.dock.iconScale + 16).dp else 0.dp
+            val dockInset = if (state.prefs.dock.enabled) (56 * state.prefs.dock.iconScale + 12).dp else 0.dp
             BoxWithConstraints(Modifier.weight(1f).padding(
                 start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
                 end = if (state.prefs.dock.side == "Right") dockInset else 0.dp
             )) {
-            val rowHeight = (maxHeight / prefs.rows).coerceAtLeast((48 * prefs.iconScale + if (prefs.labels) 40 else 16).dp)
+            val rowHeight = (maxHeight / prefs.rows).coerceAtLeast((56 * prefs.iconScale + if (prefs.labels) 40 else 16).dp)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
                 modifier = Modifier.fillMaxSize(),
@@ -114,8 +116,9 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(if (prefs.listMode) (prefs.spacing / 2).dp else 0.dp)
             ) {
                 items(selected.take(slotCount), key = { it.key }) { app ->
-                    if (prefs.listMode) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs)
-                    else AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth().height(rowHeight))
+                    if (prefs.listMode) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs, !prefs.preventChanges, LayoutArea.HOME)
+                    else AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth().height(rowHeight),
+                        draggable = !prefs.preventChanges, dragArea = LayoutArea.HOME)
                 }
                 items(folders.take((slotCount - selected.size).coerceAtLeast(0)), key = { "folder:${it.id}" }) { folder ->
                     FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, actions.manageLayout, Modifier.fillMaxWidth().height(if (prefs.listMode) 88.dp else rowHeight))
@@ -127,12 +130,14 @@ fun HomeScreen(
                         Modifier.height(if (prefs.listMode) 88.dp else rowHeight).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
                             if (user != null) repository.launchShortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
                             else android.widget.Toast.makeText(context, "This shortcut's profile is unavailable", android.widget.Toast.LENGTH_SHORT).show()
-                        }, onLongClick = { actions.update { current -> current.copy(shortcuts = current.shortcuts - shortcut) } }).padding(8.dp),
+                        }, onLongClick = { actions.update { current ->
+                            if (current.prefs.home.preventChanges) current else current.copy(shortcuts = current.shortcuts - shortcut)
+                        } }).padding(8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
                         Box {
-                            if (app != null) AppIcon(app, repository, state, (48 * prefs.iconScale).toInt())
+                            if (app != null) AppIcon(app, repository, state, (56 * prefs.iconScale).toInt())
                             else Icon(Icons.Rounded.Shortcut, null, modifier = Modifier.size(48.dp))
                             Icon(Icons.Rounded.Shortcut, null, tint = Cerulean, modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).background(Ink, CircleShape))
                         }
@@ -298,7 +303,17 @@ fun AppDrawer(
     val scope = rememberCoroutineScope()
     val letters = listOf("#", "1") + ('A'..'Z').map { it.toString() }
     val positions = remember(rows) { rows.mapIndexedNotNull { i, row -> (row as? DrawerRow.Header)?.let { it.letter to i } }.toMap() }
-    fun scrollTo(letter: String) { positions[letter]?.let { index -> scope.launch { grid.scrollToItem(index) } } }
+    var scrubLetter by remember { mutableStateOf<String?>(null) }
+    var scrubY by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val visibleLetter by remember(positions) { derivedStateOf {
+        positions.entries.lastOrNull { it.value <= grid.firstVisibleItemIndex }?.key
+    } }
+    fun scrollTo(letter: String) {
+        val index = letters.indexOf(letter)
+        val nearest = letters.drop(index.coerceAtLeast(0)).firstOrNull { it in positions } ?: positions.keys.lastOrNull() ?: return
+        positions[nearest]?.let { target -> scope.launch { grid.scrollToItem(target) } }
+    }
     val showSearchBar = Screen.APPS in state.prefs.search.barScreens
     val searchField = @Composable {
         Box(Modifier.padding(end = 10.dp, top = 8.dp, bottom = 8.dp)) {
@@ -325,22 +340,27 @@ fun AppDrawer(
                             Text(row.letter, color = LocalContentColor.current, fontSize = 14.sp, modifier = Modifier.width(22.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = .1f), thickness = 0.5.dp)
                         }
-                        is DrawerRow.App -> if (prefs.listMode) AppListRow(row.app, repository, state, { actions.launch(row.app) }, { actions.menu(row.app) }, prefs)
-                            else AppTile(row.app, repository, state, prefs, badges[row.app.badgeKey] ?: 0, { actions.launch(row.app) }, { actions.menu(row.app) }, Modifier.fillMaxWidth())
+                        is DrawerRow.App -> if (prefs.listMode) AppListRow(row.app, repository, state, { actions.launch(row.app) }, { actions.menu(row.app) }, prefs, draggable = true)
+                            else AppTile(row.app, repository, state, prefs, badges[row.app.badgeKey] ?: 0, { actions.launch(row.app) }, { actions.menu(row.app) }, Modifier.fillMaxWidth(), draggable = true)
                     }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(20.dp)) }
             }
 
             // Condensed vertical A-Z scrub rail (~9sp font) along far right edge
+            Box(Modifier.width(28.dp).fillMaxHeight()) {
             Column(
                 Modifier.width(24.dp).fillMaxHeight().padding(vertical = 4.dp).pointerInput(positions) {
                     detectDragGestures(onDragStart = { point ->
                         val idx = (point.y / size.height * letters.size).toInt().coerceIn(0, letters.lastIndex)
+                        scrubY = point.y.coerceIn(0f, size.height.toFloat())
+                        scrubLetter = letters[idx]
                         scrollTo(letters[idx])
-                    }, onDrag = { change, _ ->
+                    }, onDragEnd = { scrubLetter = null }, onDragCancel = { scrubLetter = null }, onDrag = { change, _ ->
                         change.consume()
                         val idx = (change.position.y / size.height * letters.size).toInt().coerceIn(0, letters.lastIndex)
+                        scrubY = change.position.y.coerceIn(0f, size.height.toFloat())
+                        scrubLetter = letters[idx]
                         scrollTo(letters[idx])
                     })
                 },
@@ -353,9 +373,18 @@ fun AppDrawer(
                         fontSize = 9.sp,
                         fontWeight = if (letter in positions) FontWeight.Bold else FontWeight.Normal,
                         color = if (letter in positions) LocalContentColor.current.copy(alpha = .7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .25f),
-                        modifier = Modifier.fillMaxWidth().weight(1f).clickable(enabled = letter in positions) { scrollTo(letter) }.wrapContentSize()
+                        modifier = Modifier.fillMaxWidth().weight(1f)
+                            .background(if (letter == (scrubLetter ?: visibleLetter)) Color.White.copy(alpha = .3f) else Color.Transparent, RoundedCornerShape(8.dp))
+                            .clickable(enabled = letter in positions) { scrollTo(letter) }.wrapContentSize()
                     )
                 }
+            }
+            scrubLetter?.let { letter ->
+                Surface(Modifier.offset(x = (-54).dp, y = with(density) { scrubY.toDp() } - 24.dp).size(48.dp),
+                    shape = CircleShape, color = Color.White.copy(alpha = .7f), contentColor = Ink) {
+                    Box(contentAlignment = Alignment.Center) { Text(letter, fontSize = 24.sp) }
+                }
+            }
             }
         }
         if (showSearchBar && state.prefs.search.barAtBottom) searchField()
@@ -363,8 +392,10 @@ fun AppDrawer(
 }
 
 @Composable
-fun AppListRow(app: AppEntry, repository: AppsRepository, state: LauncherState, onClick: () -> Unit, onLongClick: () -> Unit, prefs: GridPrefs = state.prefs.drawer) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 10.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+fun AppListRow(app: AppEntry, repository: AppsRepository, state: LauncherState, onClick: () -> Unit, onLongClick: () -> Unit,
+    prefs: GridPrefs = state.prefs.drawer, draggable: Boolean = false, dragArea: LayoutArea? = null) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick)
+        .padding(vertical = 10.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         AppIcon(app, repository, state, (40 * prefs.iconScale).toInt())
         if (prefs.labels) Text(state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label, modifier = Modifier.padding(start = 15.dp).weight(1f), fontSize = 14.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -388,8 +419,8 @@ fun FavoritesScreen(
     val excluded = buildSet {
         addAll(state.hiddenApps)
         addAll(prefs.excluded)
-        if (prefs.excludeDock) addAll(state.dockApps)
-        if (prefs.excludeFolders) state.folders.forEach { addAll(it.apps) }
+        if (prefs.excludeDock) addAll(state.dockApps.filterNot { it in state.favoriteApps })
+        if (prefs.excludeFolders) state.folders.forEach { folder -> addAll(folder.apps.filterNot { it in state.favoriteApps }) }
     }
     val favorites = remember(state.favoriteApps, state.launches, apps, prefs, usage, excluded) {
         val baseList = if (prefs.byUsage) {
@@ -444,7 +475,8 @@ fun FavoritesScreen(
         if (favorites.isEmpty()) item { EmptyCard(Icons.Rounded.StarOutline, "Your favorites find you", "Open apps to see your most used here, or long-press any app to pin it.", "Browse applications", { actions.navigate(Screen.APPS) }) }
         else items(favorites.chunked(columns)) { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
-                row.forEach { app -> AppTile(app, repository, state, prefs.grid.copy(multiline = false), badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f)) }
+                row.forEach { app -> AppTile(app, repository, state, prefs.grid.copy(multiline = false), badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f),
+                    draggable = true, dragArea = LayoutArea.FAVORITES) }
                 repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }

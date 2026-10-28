@@ -236,8 +236,8 @@ class LauncherStore(context: Context) {
         const val SCHEMA_VERSION = 1
         const val MAX_JSON_BYTES = 1_048_576
         const val MAX_JSON_DEPTH = 32
-        const val MAX_APPS = 2_048
-        const val MAX_FOLDERS = 128
+        const val MAX_APPS = MAX_LAYOUT_APPS
+        const val MAX_FOLDERS = MAX_LAYOUT_FOLDERS
         const val MAX_SHORTCUTS = 512
         const val MAX_CONTACTS = 256
         const val MAX_WIDGETS = 64

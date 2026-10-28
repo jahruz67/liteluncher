@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Modifier
@@ -17,30 +18,38 @@ import dev.liteluncher.data.NavigationPrefs
 import dev.liteluncher.data.Screen
 import kotlin.math.abs
 
+fun NavigationPrefs.horizontalScreens(): List<Screen> =
+    listOf(Screen.DESKTOP, Screen.HOME, Screen.APPS).filter { it == Screen.HOME || it in enabledScreens }
+
 class ScreenManager(initial: Screen = Screen.HOME) {
     var current by mutableStateOf(initial)
         private set
+    var navigationRevision by mutableLongStateOf(0L)
+        private set
 
     fun navigate(screen: Screen, prefs: NavigationPrefs) {
-        if (screen == Screen.HOME || screen in prefs.enabledScreens) current = screen
+        if (screen == Screen.HOME || screen in prefs.enabledScreens) {
+            current = screen
+            // Repeating Home must also cancel a swipe that has not settled yet.
+            navigationRevision++
+        }
+    }
+
+    fun onPageSettled(screen: Screen, prefs: NavigationPrefs) {
+        if (screen in prefs.horizontalScreens()) current = screen
     }
 
     fun swipe(direction: Direction, prefs: NavigationPrefs) {
-        val dx = when (direction) { Direction.LEFT -> 1; Direction.RIGHT -> -1; else -> 0 }
-        val dy = when (direction) { Direction.UP -> 1; Direction.DOWN -> -1; else -> 0 }
-        val target = Screen.entries.firstOrNull { it.x == current.x + dx && it.y == current.y + dy }
-        when {
-            target != null && target in prefs.enabledScreens -> navigate(target, prefs)
-            prefs.infinite -> {
-                val axis = Screen.entries.filter { it in prefs.enabledScreens && (if (dx != 0) it.y == current.y else it.x == current.x) }
-                    .sortedBy { if (dx != 0) it.x else it.y }
-                if (axis.isNotEmpty()) {
-                    val index = axis.indexOf(current).coerceAtLeast(0)
-                    val step = if (dx + dy > 0) 1 else -1
-                    navigate(axis[(index + step + axis.size) % axis.size], prefs)
-                }
-            }
-        }
+        val horizontal = direction == Direction.LEFT || direction == Direction.RIGHT
+        val axis = Screen.entries.filter {
+            (it == Screen.HOME || it in prefs.enabledScreens) && (if (horizontal) it.y == current.y else it.x == current.x)
+        }.sortedBy { if (horizontal) it.x else it.y }
+        val index = axis.indexOf(current)
+        if (index < 0 || axis.size < 2) return
+        val step = if (direction == Direction.LEFT || direction == Direction.UP) 1 else -1
+        val next = index + step
+        val target = axis.getOrNull(next) ?: if (prefs.infinite) axis[(next + axis.size) % axis.size] else return
+        navigate(target, prefs)
     }
 
     companion object {
@@ -55,50 +64,52 @@ class ScreenManager(initial: Screen = Screen.HOME) {
 @Composable
 fun Modifier.launcherGestures(
     fingers: Int, home: Boolean, onSwipe: (Direction, Int) -> Unit, onPinch: (Boolean) -> Unit,
-    onTranslate: (Float) -> Unit = {}, onRelease: () -> Unit = {}
+    onPointerCountChange: (Int) -> Unit = {}
 ): Modifier {
     val swipeAction by rememberUpdatedState(onSwipe)
     val pinchAction by rememberUpdatedState(onPinch)
-    val translateAction by rememberUpdatedState(onTranslate)
-    val releaseAction by rememberUpdatedState(onRelease)
+    val pointerCountAction by rememberUpdatedState(onPointerCountChange)
     return pointerInput(fingers, home) {
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
-        val start = down.position
-        var displacement = Offset.Zero
-        var pointerCount = 1
-        var consumed = false
-        var firstSpan = 0f
-        var lastSpan = 0f
-        var finished = false
-        while (!finished) {
-            val event = awaitPointerEvent(PointerEventPass.Final)
-            val pressed = event.changes.filter { it.pressed }
-            pointerCount = maxOf(pointerCount, pressed.size)
-            event.changes.firstOrNull { it.id == down.id }?.let {
-                displacement = it.position - start
-                if (it.position != it.previousPosition) consumed = consumed || it.isConsumed
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+            val start = down.position
+            var displacement = Offset.Zero
+            var pointerCount = 1
+            var consumed = false
+            var firstSpan = 0f
+            var lastSpan = 0f
+            var finished = false
+            pointerCountAction(1)
+            try {
+                while (!finished) {
+                    val event = awaitPointerEvent(PointerEventPass.Final)
+                    val pressed = event.changes.filter { it.pressed }
+                    pointerCount = maxOf(pointerCount, pressed.size)
+                    pointerCountAction(pointerCount)
+                    event.changes.firstOrNull { it.id == down.id }?.let {
+                        displacement = it.position - start
+                        if (it.position != it.previousPosition) consumed = consumed || it.isConsumed
+                    }
+                    if (pressed.size >= 2) {
+                        lastSpan = (pressed[0].position - pressed[1].position).getDistance()
+                        if (firstSpan == 0f) firstSpan = lastSpan
+                    }
+                    finished = pressed.isEmpty()
+                }
+            } finally {
+                pointerCountAction(0)
             }
-            if (pressed.size >= 2) {
-                lastSpan = (pressed[0].position - pressed[1].position).getDistance()
-                if (firstSpan == 0f) firstSpan = lastSpan
-            }
-            if (!consumed && pointerCount >= fingers && abs(displacement.x) > abs(displacement.y) &&
-                abs(displacement.x) > viewConfiguration.touchSlop) translateAction(displacement.x)
-            finished = pressed.isEmpty()
-        }
-        releaseAction()
-        val pinch = firstSpan > 0f && abs(lastSpan - firstSpan) > 64 * density
-        when {
-            pinch && home && (!consumed || pointerCount >= 2) -> pinchAction(lastSpan < firstSpan)
-            pointerCount >= fingers && (!consumed || pointerCount >= 2) &&
-                maxOf(abs(displacement.x), abs(displacement.y)) > 68 * density -> {
-                val direction = if (abs(displacement.x) > abs(displacement.y)) {
-                    if (displacement.x < 0) Direction.LEFT else Direction.RIGHT
-                } else if (displacement.y < 0) Direction.UP else Direction.DOWN
-                swipeAction(direction, pointerCount)
+            val pinch = firstSpan > 0f && abs(lastSpan - firstSpan) > 64 * density
+            when {
+                pinch && home && (!consumed || pointerCount >= 2) -> pinchAction(lastSpan < firstSpan)
+                pointerCount >= fingers && (!consumed || pointerCount >= 2) &&
+                    maxOf(abs(displacement.x), abs(displacement.y)) > 68 * density -> {
+                    val direction = if (abs(displacement.x) > abs(displacement.y)) {
+                        if (displacement.x < 0) Direction.LEFT else Direction.RIGHT
+                    } else if (displacement.y < 0) Direction.UP else Direction.DOWN
+                    swipeAction(direction, pointerCount)
+                }
             }
         }
     }
-}
 }

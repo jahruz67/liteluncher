@@ -17,6 +17,7 @@ import androidx.lifecycle.viewModelScope
 import dev.liteluncher.data.Screen
 import dev.liteluncher.platform.SystemActions
 import dev.liteluncher.platform.WidgetController
+import dev.liteluncher.platform.WidgetGrid
 import dev.liteluncher.ui.LauncherApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -83,13 +84,10 @@ class MainActivity : ComponentActivity() {
                     val height = item.rows
                     require(width in 1..columns && height in 1..rows) { "This widget no longer fits the desktop grid" }
                     val others = state.widgets.filterNot { it.id == item.id }
-                    val free = (0..rows - height).asSequence().flatMap { row ->
-                        (0..columns - width).asSequence().map { column -> column to row }
-                    }.firstOrNull { (column, row) -> others.none {
-                        column < it.column + it.columns && column + width > it.column && row < it.row + it.rows && row + height > it.row
-                    } }
-                    requireNotNull(free) { "The widget canvas is full. Resize or remove a widget first." }
-                    state.copy(widgets = others + item.copy(column = free.first, row = free.second))
+                    require(item.page in 0 until state.prefs.desktop.pageCount) { "This desktop page is no longer available" }
+                    val placed = WidgetGrid.place(item, others, columns, rows)
+                    requireNotNull(placed) { "The widget canvas is full. Resize or remove a widget first." }
+                    state.copy(widgets = others + placed)
                 }
                 saved.onFailure {
                     widgets.remove(item.id)

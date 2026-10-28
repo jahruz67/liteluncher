@@ -11,12 +11,15 @@ import android.os.UserManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,9 +42,10 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,6 +60,8 @@ import dev.liteluncher.settings.SettingsScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filterNotNull
 
 data class WorkspaceActions(
     val launch: (AppEntry) -> Unit,
@@ -67,7 +73,9 @@ data class WorkspaceActions(
     val widgets: () -> Unit,
     val folder: (FolderItem, Boolean) -> Unit,
     val requestContacts: () -> Unit,
-    val update: ((LauncherState) -> LauncherState) -> Unit
+    val update: ((LauncherState) -> LauncherState) -> Unit,
+    val dockMenu: (AppEntry) -> Unit = menu,
+    val folderMenu: (AppEntry) -> Unit = menu
 )
 
 @Composable
@@ -81,14 +89,16 @@ fun LauncherApp(
     val storageError by model.store.error.collectAsStateWithLifecycle()
     val apps by model.apps.apps.collectAsStateWithLifecycle()
     val badges by LauncherNotificationService.counts.collectAsStateWithLifecycle()
-    var pagerOffset by remember { mutableFloatStateOf(0f) }
     val context = LocalContext.current
     val activity = context as Activity
     val view = LocalView.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val manager = rememberSaveable(saver = ScreenManager.stateSaver) { ScreenManager() }
     var panel by rememberSaveable { mutableStateOf("") }
     var screenManagerReturn by rememberSaveable { mutableStateOf("") }
     var appMenu by remember { mutableStateOf<AppEntry?>(null) }
+    var appMenuScreen by remember { mutableStateOf(Screen.HOME) }
+    var appMenuFromDock by remember { mutableStateOf(false) }
     var editApp by remember { mutableStateOf<AppEntry?>(null) }
     var folder by remember { mutableStateOf<FolderItem?>(null) }
     var folderFromDock by remember { mutableStateOf(false) }
@@ -105,15 +115,13 @@ fun LauncherApp(
     // Deletion snackbar state with Undo
     var snackbarVisible by remember { mutableStateOf(false) }
     var snackbarMessage by remember { mutableStateOf("Entry deleted") }
+    var undoSignal by remember { mutableIntStateOf(0) }
     var lastDeletedWidget by remember { mutableStateOf<WidgetItem?>(null) }
-    var lastDeletedAppKey by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
+    var lastDeletedAppKey by remember { mutableStateOf<Triple<LayoutArea, String, Int>?>(null) }
 
     // Multi-page desktop support
     var currentDesktopPage by rememberSaveable { mutableIntStateOf(0) }
-
-    // Drag and drop state
-    var draggingAppKey by remember { mutableStateOf<String?>(null) }
-    var dragDestinationCapsule by remember { mutableStateOf<String?>(null) }
+    var desktopBounds by remember { mutableStateOf(Rect.Zero) }
 
     val toast: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     val launch: (AppEntry) -> Unit = { app ->
@@ -155,10 +163,92 @@ fun LauncherApp(
     }
 
     val actions = WorkspaceActions(
-        launch = launch, menu = { appMenu = it }, navigate = navigate, settings = { panel = "settings" },
-        manageScreens = { screenManagerReturn = panel; panel = "screens" }, manageLayout = { panel = "layout" }, widgets = { widgetPicker = true },
-        folder = { item, dock -> folder = item; folderFromDock = dock }, requestContacts = onContacts, update = model.store::update
+        launch = launch, menu = { appMenuScreen = manager.current; appMenuFromDock = false; appMenu = it }, navigate = navigate, settings = { panel = "settings" },
+        manageScreens = { screenManagerReturn = panel; panel = "screens" }, manageLayout = { panel = "layout" }, widgets = {
+            if (state.prefs.desktop.preventChanges) toast("Desktop is locked")
+            else { navigate(Screen.DESKTOP); widgetPicker = true }
+        },
+        folder = { item, dock -> folder = item; folderFromDock = dock }, requestContacts = onContacts, update = model.store::update,
+        dockMenu = { appMenuFromDock = true; appMenuScreen = manager.current; appMenu = it },
+        folderMenu = { appMenuFromDock = false; appMenuScreen = Screen.APPS; appMenu = it }
     )
+
+    fun finishWidgetRemoval() {
+        lastDeletedWidget?.let { deleted ->
+            if (state.widgets.any { it.id == deleted.id }) widgets.cancelRemoval(deleted.id) else widgets.remove(deleted.id)
+        }
+        lastDeletedWidget = null
+    }
+    val removeEntry: (String, LayoutArea) -> Unit = { key, area ->
+        if (state.layoutLocked(area)) toast("${area.title} is locked") else {
+            lastDeletedAppKey = Triple(area, key, state.layoutApps(area).indexOf(key))
+            finishWidgetRemoval()
+            model.store.update { removeLayoutApp(it, area, key) }
+            snackbarMessage = "Entry removed"
+            snackbarVisible = true
+            undoSignal++
+        }
+    }
+    val undoRemoval: () -> Unit = undo@{
+        val deletedWidget = lastDeletedWidget
+        if (deletedWidget != null) widgets.cancelRemoval(deletedWidget.id)
+        if (deletedWidget != null) model.store.update { current ->
+            if (current.widgets.any { it.id == deletedWidget.id }) current else current.copy(widgets = current.widgets + deletedWidget)
+        }
+        val removedApp = lastDeletedAppKey
+        if (removedApp != null) {
+            val (area, key, index) = removedApp
+            val result = restoreLayoutApp(state, area, key, index)
+            if (result.error != null) {
+                toast(result.error)
+                return@undo
+            }
+            model.store.update { restoreLayoutApp(it, area, key, index).state }
+        }
+        lastDeletedWidget = null
+        lastDeletedAppKey = null
+        snackbarVisible = false
+    }
+    val onAppDrop: (DraggedApp, AppDropTarget) -> Unit = { item, target ->
+        fun place(current: LauncherState): LayoutEditResult {
+            if (target is AppDropTarget.Area) {
+                if (target.area == LayoutArea.DOCK && !current.prefs.dock.enabled && item.source != LayoutArea.DOCK)
+                    return LayoutEditResult(current, "Enable Dock in Settings before dropping apps there")
+                if (target.area == LayoutArea.FAVORITES && Screen.FAVORITES !in current.prefs.navigation.enabledScreens && item.source != LayoutArea.FAVORITES)
+                    return LayoutEditResult(current, "Enable the Favorites screen before dropping apps there")
+            }
+            return applyAppDrop(current, item.app.key, item.source, target, item.folderId)
+        }
+        val result = place(state)
+        when {
+            apps.none { it.key == item.app.key } -> toast("This app is no longer available")
+            result.error != null -> toast(result.error)
+            target == AppDropTarget.Remove && item.source != null -> removeEntry(item.app.key, item.source)
+            else -> {
+                model.store.update { place(it).state }
+                if (item.source == null && panel.isEmpty() && target is AppDropTarget.Area) {
+                    keyboard?.hide()
+                    when (target.area) {
+                        LayoutArea.HOME, LayoutArea.DOCK -> navigate(Screen.HOME)
+                        LayoutArea.FAVORITES -> if (Screen.FAVORITES in state.prefs.navigation.enabledScreens) navigate(Screen.FAVORITES)
+                    }
+                }
+            }
+        }
+    }
+    val latestDrop by rememberUpdatedState(onAppDrop)
+    val drag = remember { AppDragController { item, target -> latestDrop(item, target) } }
+    LaunchedEffect(panel) { drag.cancel() }
+    val hoveredFolderId = (drag.hovered?.target as? AppDropTarget.Folder)?.id
+    LaunchedEffect(drag.active?.token, hoveredFolderId) {
+        if (drag.active != null && hoveredFolderId != null && folder?.id != hoveredFolderId) {
+            delay(500)
+            state.folders.find { it.id == hoveredFolderId }?.let {
+                folder = it
+                folderFromDock = it.id in state.dockFolders
+            }
+        }
+    }
 
     LaunchedEffect(ready, apps) {
         if (ready && apps.isNotEmpty() && !state.initialized) model.store.update { current ->
@@ -170,12 +260,16 @@ fun LauncherApp(
             }
         }
     }
+    LaunchedEffect(ready) {
+        if (ready) widgets.finishRemovals(state.widgets.mapTo(mutableSetOf()) { it.id })
+    }
     LaunchedEffect(permissionSignal, apps.size) {
         usage = withContext(Dispatchers.IO) { model.apps.usage() }
         iconPacks = withContext(Dispatchers.IO) { model.apps.iconPacks() }
     }
     LaunchedEffect(homeSignal) {
         if (homeSignal > 0) {
+            drag.cancel()
             panel = ""; appMenu = null; editApp = null; folder = null; emptyMenu = false; widgetPicker = false
             perform(state.prefs.gestures[Gesture.HOME] ?: GestureBinding(Action.HOME))
         }
@@ -186,22 +280,27 @@ fun LauncherApp(
     LaunchedEffect(state.prefs.navigation.enabledScreens) {
         if (manager.current !in state.prefs.navigation.enabledScreens) navigate(Screen.HOME)
     }
+    LaunchedEffect(state.prefs.desktop.pageCount) {
+        currentDesktopPage = currentDesktopPage.coerceIn(0, state.prefs.desktop.pageCount.coerceAtLeast(1) - 1)
+    }
     LaunchedEffect(lastScroll) { if (lastScroll != 0L) { scrolling = true; delay(650); scrolling = false } }
-    LaunchedEffect(manager.current, state.prefs.dock.autoHide, dockWakeSignal) {
+    LaunchedEffect(manager.current, state.prefs.dock.autoHide, dockWakeSignal, drag.active != null) {
         dockAwake = true
-        if (state.prefs.dock.autoHide) { delay(3500); dockAwake = false }
+        if (state.prefs.dock.autoHide && drag.active == null) { delay(3500); dockAwake = false }
     }
 
     // Auto-dismiss deletion snackbar after 4 seconds
-    LaunchedEffect(snackbarVisible) {
+    LaunchedEffect(snackbarVisible, undoSignal) {
         if (snackbarVisible) {
             delay(4000)
+            finishWidgetRemoval()
+            lastDeletedAppKey = null
             snackbarVisible = false
         }
     }
 
     SideEffect {
-        if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets)
+        if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets, currentDesktopPage)
         val controller = WindowCompat.getInsetsController(activity.window, view)
         controller.isAppearanceLightStatusBars = !state.prefs.appearance.lightStatusIcons
         controller.isAppearanceLightNavigationBars = !state.prefs.appearance.lightNavigationIcons
@@ -225,6 +324,7 @@ fun LauncherApp(
     BackHandler(enabled = panel.isNotEmpty() || manager.current != Screen.HOME || folder != null) {
         when { folder != null -> folder = null; panel.isNotEmpty() -> panel = ""; else -> { query = ""; navigate(Screen.HOME) } }
     }
+    BackHandler(enabled = drag.active != null) { drag.cancel() }
     val nestedScroll = remember { object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             if (available.getDistance() > 1f) lastScroll = android.os.SystemClock.uptimeMillis()
@@ -247,7 +347,7 @@ fun LauncherApp(
         val shouldScrim = manager.current == Screen.SEARCH || panel == "screens"
 
         MaterialTheme(colorScheme = workspaceScheme) {
-        CompositionLocalProvider(LocalContentColor provides foreground) {
+        CompositionLocalProvider(LocalContentColor provides foreground, LocalAppDrag provides drag) {
             Box(Modifier.fillMaxSize()) {
                 if (launcherSurface != SurfaceTheme.GLASS) Box(Modifier.fillMaxSize().background(surfaceColor(launcherSurface, MaterialTheme.colorScheme.primary)))
                 val appearance = state.prefs.appearance
@@ -284,22 +384,68 @@ fun LauncherApp(
                             when (panel) {
                                 "settings" -> SettingsScreen(state, apps, iconPacks, model.store::update, { panel = "" }, { screenManagerReturn = "settings"; panel = "screens" }, onExport, onImport,
                                     onDefaultHome, { SystemActions.notificationAccess(context) }, { SystemActions.usageAccess(context) }, onContacts)
-                                "layout" -> ManageLayoutScreen(state, apps, model.apps, model.store::update, { panel = "" })
+                                "layout" -> ManageLayoutScreen(state, apps, model.apps, model.store::update, { panel = "" },
+                                    onManageScreens = { screenManagerReturn = "layout"; panel = "screens" },
+                                    onRemoveApp = { area, key -> removeEntry(key, area) })
                             }
                         }
                     }
                     }
                     }
                 } else {
-                    val density = LocalDensity.current.density
+                    val horizontalScreens = state.prefs.navigation.horizontalScreens()
+                    val horizontalPaging = state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide"
+                    val pager = rememberPagerState(initialPage = horizontalScreens.indexOf(manager.current).coerceAtLeast(0), pageCount = { horizontalScreens.size })
+                    val navigationRevision = manager.navigationRevision
+                    var completedNavigation by remember { mutableStateOf<Pair<Long, List<Screen>>?>(null) }
+                    var workspacePointerCount by remember { mutableIntStateOf(0) }
+                    LaunchedEffect(navigationRevision, horizontalScreens, horizontalPaging) {
+                        completedNavigation = null
+                        if (!horizontalPaging) return@LaunchedEffect
+                        try {
+                            val target = horizontalScreens.indexOf(manager.current)
+                            if (target >= 0 && (pager.isScrollInProgress || pager.currentPage != target || pager.currentPageOffsetFraction != 0f)) {
+                                pager.stopScroll(MutatePriority.PreventUserInput)
+                                if (state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide") pager.animateScrollToPage(target)
+                                else pager.scrollToPage(target)
+                            }
+                        } finally {
+                            // A finger can interrupt the animation without creating a new navigation request.
+                            if (manager.navigationRevision == navigationRevision) completedNavigation = navigationRevision to horizontalScreens
+                        }
+                    }
+                    LaunchedEffect(pager, horizontalScreens, horizontalPaging) {
+                        snapshotFlow {
+                            if (horizontalPaging && !pager.isScrollInProgress && completedNavigation == (manager.navigationRevision to horizontalScreens) && manager.current in horizontalScreens)
+                                horizontalScreens.getOrNull(pager.settledPage) else null
+                        }.filterNotNull().collect { screen ->
+                            if (screen != manager.current) {
+                                manager.onPageSettled(screen, state.prefs.navigation)
+                                dockWakeSignal++
+                                folder = null
+                            }
+                        }
+                    }
+                    val swipeWithPager = state.prefs.navigation.fingers == 1 && !state.prefs.navigation.infinite && horizontalPaging &&
+                        listOf(Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT).all {
+                            state.prefs.gestures[it]?.action in listOf(null, Action.NONE, Action.NAVIGATE)
+                        }
+                    BackHandler(enabled = horizontalPaging && pager.isScrollInProgress && manager.current in horizontalScreens && folder == null) {
+                        navigate(Screen.HOME)
+                    }
                     val gestureModifier = Modifier.launcherGestures(
                         fingers = state.prefs.navigation.fingers,
                         home = manager.current == Screen.HOME,
-                        onTranslate = { offset ->
-                            if (state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide") pagerOffset = offset / density
+                        onPointerCountChange = { count ->
+                            if (count >= 2) drag.cancel()
+                            if (count >= 2 && workspacePointerCount < 2 && swipeWithPager && manager.current in horizontalScreens) {
+                                manager.navigate(manager.current, state.prefs.navigation)
+                            }
+                            workspacePointerCount = count
                         },
-                        onRelease = { pagerOffset = 0f },
-                        onSwipe = { direction, fingers ->
+                        onSwipe = swipe@{ direction, fingers ->
+                            if (fingers == 1 && swipeWithPager && manager.current in horizontalScreens &&
+                                (direction == Direction.LEFT || direction == Direction.RIGHT)) return@swipe
                             val gesture = when (direction) {
                                 Direction.UP -> if (fingers >= 2) Gesture.TWO_UP else Gesture.SWIPE_UP
                                 Direction.DOWN -> if (fingers >= 2) Gesture.TWO_DOWN else Gesture.SWIPE_DOWN
@@ -319,34 +465,9 @@ fun LauncherApp(
                         if (storageError != null) Text(storageError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
                             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
 
-                        // Directional Asymmetry Transitions:
-                        // - Horizontal Swipes: 1:1 slide physics with spring-damping between Desktop, Home, Apps
-                        // - Vertical Swipes: Dissolve/crossfade fade transitions (no vertical sliding) between Search, Home, Favorites
-                        AnimatedContent(
-                            targetState = manager.current,
-                            modifier = Modifier.weight(1f),
-                            transitionSpec = {
-                                val horizontal = initialState.x != targetState.x
-                                val transition = if (horizontal) state.prefs.behavior.horizontalTransition else state.prefs.behavior.verticalTransition
-                                if (!state.prefs.behavior.animations || transition == "None") {
-                                    EnterTransition.None togetherWith ExitTransition.None
-                                } else if (horizontal && transition == "Slide") {
-                                    val sign = if (targetState.x > initialState.x) 1 else -1
-                                    (slideInHorizontally(spring(dampingRatio = 0.85f, stiffness = 400f)) { it * sign } + fadeIn(tween(180))) togetherWith
-                                        (slideOutHorizontally(spring(dampingRatio = 0.85f, stiffness = 400f)) { -it * sign } + fadeOut(tween(180)))
-                                } else if (transition == "Slide") {
-                                    val sign = if (targetState.y > initialState.y) 1 else -1
-                                    slideInVertically(tween(240)) { it * sign } togetherWith slideOutVertically(tween(240)) { -it * sign }
-                                } else {
-                                    // Vertical Swipes: Dissolve/crossfade fade transitions (no vertical sliding)
-                                    fadeIn(tween(240)) togetherWith fadeOut(tween(240))
-                                }
-                            },
-                            label = "Directional workspace"
-                        ) { screen ->
-                            val dockInset = if (screen == Screen.FAVORITES && state.prefs.dock.enabled) (48 * state.prefs.dock.iconScale + 16).dp else 0.dp
+                        val renderPage: @Composable (Screen) -> Unit = { screen ->
+                            val dockInset = if (screen == Screen.FAVORITES && state.prefs.dock.enabled) (56 * state.prefs.dock.iconScale + 12).dp else 0.dp
                             Box(Modifier.fillMaxSize()
-                                .offset(x = pagerOffset.dp)
                                 .padding(start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
                                     end = if (state.prefs.dock.side == "Right") dockInset else 0.dp)
                             ) {
@@ -390,7 +511,7 @@ fun LauncherApp(
                                         actions = actions,
                                         onVoice = onVoice
                                     )
-                                    Screen.DESKTOP -> Box(Modifier.fillMaxSize()) {
+                                    Screen.DESKTOP -> Box(Modifier.fillMaxSize().combinedClickable(onClick = {}, onLongClick = actions.widgets)) {
                                         val pageWidgets = state.widgets.filter { it.page == currentDesktopPage }
                                         Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
                                             // Multi-page desktop pagination header
@@ -417,17 +538,22 @@ fun LauncherApp(
                                                     model.store.update { it.copy(widgets = mergeWidgetEdits(it.widgets, pageWidgets, list)) }
                                                 },
                                                 modifier = Modifier.weight(1f).fillMaxWidth(),
+                                                onCanvasBounds = { desktopBounds = it },
                                                 onWidgetDeleted = { deleted ->
+                                                    finishWidgetRemoval()
+                                                    widgets.deferRemoval(deleted.id)
                                                     lastDeletedWidget = deleted
+                                                    lastDeletedAppKey = null
                                                     snackbarMessage = "Widget deleted"
                                                     snackbarVisible = true
+                                                    undoSignal++
                                                 }
                                             )
                                         }
 
                                         if (pageWidgets.isEmpty() && state.prefs.desktop.hint) {
                                             ExtendedFloatingActionButton(
-                                                onClick = { widgetPicker = true },
+                                                onClick = actions.widgets,
                                                 containerColor = MaterialTheme.colorScheme.primary,
                                                 contentColor = Ink,
                                                 shape = RoundedCornerShape(24.dp),
@@ -443,9 +569,28 @@ fun LauncherApp(
                             }
                         }
 
-                        // Centered bottom page indicators (where inactive dots are translucent white #60FFFFFF and active morphs into elongated solid white capsule)
+                        AnimatedContent(
+                            targetState = if (horizontalPaging && manager.current in horizontalScreens) Screen.HOME else manager.current,
+                            modifier = Modifier.weight(1f),
+                            transitionSpec = {
+                                val horizontal = initialState.y == 0 && targetState.y == 0
+                                val transition = if (horizontal) state.prefs.behavior.horizontalTransition else state.prefs.behavior.verticalTransition
+                                if (!state.prefs.behavior.animations || transition == "None") {
+                                    EnterTransition.None togetherWith ExitTransition.None
+                                } else if (transition == "Slide") {
+                                    val sign = if (targetState.y > initialState.y) 1 else -1
+                                    slideInVertically(tween(240)) { it * sign } togetherWith slideOutVertically(tween(240)) { -it * sign }
+                                } else fadeIn(tween(200)) togetherWith fadeOut(tween(200))
+                            },
+                            label = "Directional workspace"
+                        ) { screen ->
+                            if (horizontalPaging && screen == Screen.HOME) {
+                                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(),
+                                    key = { horizontalScreens[it] }, userScrollEnabled = swipeWithPager && workspacePointerCount < 2 && drag.active == null) { page -> renderPage(horizontalScreens[page]) }
+                            } else renderPage(screen)
+                        }
+
                         if (state.prefs.behavior.pageIndicators && manager.current in listOf(Screen.DESKTOP, Screen.HOME, Screen.APPS)) {
-                            val horizontalScreens = listOf(Screen.DESKTOP, Screen.HOME, Screen.APPS).filter { it in state.prefs.navigation.enabledScreens || it == Screen.HOME }
                             val currentIdx = horizontalScreens.indexOf(manager.current).coerceAtLeast(0)
                             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                                 PageIndicators(
@@ -459,7 +604,9 @@ fun LauncherApp(
                         Spacer(Modifier.height(8.dp))
                     }
 
-                    val dockShown = state.prefs.dock.enabled && manager.current in listOf(Screen.HOME, Screen.FAVORITES) && dockAwake && !(scrolling && state.prefs.dock.hideOnScroll)
+                    val dockShown = state.prefs.dock.enabled &&
+                        (manager.current in listOf(Screen.HOME, Screen.FAVORITES) || drag.active != null) &&
+                        (drag.active != null || dockAwake && !(scrolling && state.prefs.dock.hideOnScroll))
                     AnimatedVisibility(
                         visible = dockShown,
                         enter = fadeIn() + slideInHorizontally { if (state.prefs.dock.side == "Left") -it else it },
@@ -475,45 +622,22 @@ fun LauncherApp(
                     }
 
 
-                    // Drag and Drop destination capsule
-                    if (dragDestinationCapsule != null) {
-                        Box(Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.TopCenter) {
-                            DestinationCapsule(dragDestinationCapsule!!)
-                        }
-                    }
-
-                    // Bottom Pill Deletion Snackbar with interactive Undo button
-                    Box(Modifier.fillMaxSize().padding(bottom = 24.dp), contentAlignment = Alignment.BottomCenter) {
-                        DeletionSnackbar(
-                            visible = snackbarVisible,
-                            message = snackbarMessage,
-                            onUndo = {
-                                if (lastDeletedWidget != null) {
-                                    model.store.update { it.copy(widgets = it.widgets + lastDeletedWidget!!) }
-                                    lastDeletedWidget = null
-                                }
-                                if (lastDeletedAppKey != null) {
-                                    val (type, list) = lastDeletedAppKey!!
-                                    model.store.update { cur ->
-                                        when (type) {
-                                            "home" -> cur.copy(homeApps = list)
-                                            "dock" -> cur.copy(dockApps = list)
-                                            "favorite" -> cur.copy(favoriteApps = list)
-                                            else -> cur
-                                        }
-                                    }
-                                    lastDeletedAppKey = null
-                                }
-                                snackbarVisible = false
-                            }
-                        )
-                    }
                 }
 
                 val currentFolder = folder?.let { selected -> state.folders.find { it.id == selected.id } }
                 if (currentFolder != null) {
-                    FolderOverlay(currentFolder, folderFromDock, state, apps, model.apps, actions, { folder = null })
+                    FolderOverlay(currentFolder, folderFromDock, state, apps, model.apps, actions.copy(menu = actions.folderMenu), { folder = null })
                 }
+                DeletionSnackbar(snackbarVisible, snackbarMessage, undoRemoval, Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+                AppDragOverlay(drag, state, model.apps)
+                if (widgetPicker) WidgetPicker(
+                    controller = widgets, prefs = state.prefs.desktop, page = currentDesktopPage, canvasBounds = desktopBounds,
+                    onSelect = { provider, location ->
+                        widgetPicker = false
+                        widgets.add(provider, location)
+                    },
+                    onDismiss = { widgetPicker = false }
+                )
             }
 
             MaterialTheme(colorScheme = baseScheme) {
@@ -524,7 +648,15 @@ fun LauncherApp(
                     repository = model.apps,
                     actions = actions,
                     onEdit = { editApp = appMenu; appMenu = null },
-                    onDismiss = { appMenu = null }
+                    onDismiss = { appMenu = null },
+                    source = appMenuScreen,
+                    fromDock = appMenuFromDock,
+                    onRemove = {
+                        val key = appMenu!!.key
+                        val area = if (appMenuFromDock) LayoutArea.DOCK else if (appMenuScreen == Screen.FAVORITES) LayoutArea.FAVORITES else LayoutArea.HOME
+                        removeEntry(key, area)
+                        appMenu = null
+                    }
                 )
 
                 if (editApp != null) EditAppDialog(
@@ -537,22 +669,12 @@ fun LauncherApp(
                 // Empty Space Context Menu: Dark card with Change Wallpaper, Add Widget, Settings, and Manage Layout
                 if (emptyMenu) EmptySpaceMenuDialog(
                     onWallpaper = { emptyMenu = false; SystemActions.wallpaper(activity) },
-                    onAddWidget = { emptyMenu = false; navigate(Screen.DESKTOP); widgetPicker = true },
+                    onAddWidget = { emptyMenu = false; actions.widgets() },
                     onSettings = { emptyMenu = false; panel = "settings" },
                     onManageLayout = { emptyMenu = false; panel = "layout" },
                     onDismiss = { emptyMenu = false }
                 )
 
-                // Categorized widget picker
-                if (widgetPicker) WidgetPicker(
-                    controller = widgets,
-                    onSelect = { provider ->
-                        widgetPicker = false
-                        navigate(Screen.DESKTOP)
-                        widgets.add(provider)
-                    },
-                    onDismiss = { widgetPicker = false }
-                )
             }
             }
         }
@@ -573,32 +695,33 @@ private fun FloatingDock(
     val isRight = prefs.side == "Right"
     val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }.take(prefs.maxItems)
     val folders = state.dockFolders.mapNotNull { id -> state.folders.find { it.id == id } }.take((prefs.maxItems - entries.size).coerceAtLeast(0))
-    val dockWidth = (48 * prefs.iconScale + 16).dp.coerceAtLeast(56.dp)
+    val dockWidth = (56 * prefs.iconScale + 12).dp.coerceAtLeast(56.dp)
     val theme = state.prefs.appearance.dock
     val shape = if (isRight) RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp)
         else RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
     BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth).windowInsetsPadding(WindowInsets.safeDrawing)) {
         val totalItems = entries.size + folders.size + if (prefs.allApps) 1 else 0
-        val estimatedHeight = (totalItems.coerceAtLeast(1) * (48 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
+        val estimatedHeight = (totalItems.coerceAtLeast(1) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
         val height = if (prefs.fullWidth) maxHeight else estimatedHeight
         val top = ((maxHeight - height) * prefs.alignment).coerceAtLeast(0.dp)
         CompositionLocalProvider(LocalContentColor provides surfaceContent(theme)) {
             Column(
-                Modifier.offset(y = top).width(dockWidth).height(height).clip(shape)
+                Modifier.offset(y = top).width(dockWidth).height(height).clip(shape).appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)
                     .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
                     .verticalScroll(rememberScrollState()).padding(vertical = prefs.padding.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, textScale = .9f)
                 val allAppsButton = @Composable {
-                    IconButton(onClick = { actions.navigate(Screen.APPS) }, modifier = Modifier.size((48 * prefs.iconScale + 16).dp)) {
+                    IconButton(onClick = { actions.navigate(Screen.APPS) }, modifier = Modifier.size((56 * prefs.iconScale + 16).dp)) {
                         Icon(Icons.Rounded.Apps, "All applications")
                     }
                 }
                 if (prefs.allApps && prefs.allAppsLeft) allAppsButton()
                 entries.forEach { app ->
                     AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0,
-                        { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth())
+                        { actions.launch(app) }, { actions.dockMenu(app) }, Modifier.fillMaxWidth(),
+                        draggable = !prefs.preventChanges, dragArea = LayoutArea.DOCK)
                 }
                 folders.forEach { item ->
                     FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) },

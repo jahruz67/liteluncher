@@ -216,12 +216,12 @@ fun SearchScreen(
                             }
                             SearchTarget.APPS -> if (matches.isNotEmpty()) {
                                 item { SectionLabel("Applications · ${matches.size}") }
-                                if (prefs.grid.listMode) items(matches, key = { it.key }) { app -> AppListRow(app, repository, state, { rememberQuery(); actions.launch(app) }, { actions.menu(app) }, prefs.grid) }
+                                if (prefs.grid.listMode) items(matches, key = { it.key }) { app -> AppListRow(app, repository, state, { rememberQuery(); actions.launch(app) }, { actions.menu(app) }, prefs.grid, draggable = true) }
                                 else items(matches.chunked(prefs.grid.columns)) { row ->
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
                                         row.forEach { app ->
                                             AppTile(app, repository, state, prefs.grid, badges[app.badgeKey] ?: 0,
-                                                { rememberQuery(); keyboard?.hide(); actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f))
+                                                { rememberQuery(); keyboard?.hide(); actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f), draggable = true)
                                         }
                                         repeat(prefs.grid.columns - row.size) { Spacer(Modifier.weight(1f)) }
                                     }

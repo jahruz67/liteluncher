@@ -1,7 +1,11 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package dev.liteluncher.settings
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -48,7 +53,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -158,7 +166,7 @@ internal fun SettingsLink(title: String, description: String, onClick: () -> Uni
 internal fun ToggleSetting(title: String, checked: Boolean, description: String = "", onChange: (Boolean) -> Unit) {
     Row(
         Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
-            .padding(vertical = 6.dp),
+            .heightIn(min = 44.dp).padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -166,7 +174,11 @@ internal fun ToggleSetting(title: String, checked: Boolean, description: String 
             if (description.isNotBlank()) SettingsNote(description)
         }
         Spacer(Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = null)
+        Box(Modifier.width(30.dp).height(18.dp).clip(CircleShape)
+            .background(if (checked) SettingsGreen.copy(alpha = .5f) else Color(0xFF777777)).padding(3.dp)) {
+            Box(Modifier.align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
+                .size(12.dp).background(if (checked) SettingsGreen else Color(0xFFBBBBBB), CircleShape))
+        }
     }
 }
 
@@ -180,14 +192,23 @@ internal fun FloatSetting(
     onChange: (Float) -> Unit
 ) {
     val safeValue = if (value.isFinite()) value.coerceIn(range) else range.start
-    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, Modifier.weight(1f), fontSize = 14.sp)
-            Text(display(safeValue), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+    val fraction = (safeValue - range.start) / (range.endInclusive - range.start)
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp)) {
+        Text(title, fontSize = 14.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(display(safeValue), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.width(44.dp))
+            Slider(value = safeValue, onValueChange = onChange,
+                modifier = Modifier.weight(1f).height(32.dp).semantics { contentDescription = title },
+                valueRange = range, steps = steps,
+                thumb = { Box(Modifier.size(10.dp).background(SettingsGreen, CircleShape)) },
+                track = {
+                    Canvas(Modifier.fillMaxWidth().height(2.dp)) {
+                        val centerY = size.height / 2
+                        drawLine(Color(0xFF777777), Offset(0f, centerY), Offset(size.width, centerY), 2.dp.toPx(), StrokeCap.Round)
+                        drawLine(SettingsGreen, Offset(0f, centerY), Offset(size.width * fraction, centerY), 2.dp.toPx(), StrokeCap.Round)
+                    }
+                })
         }
-        Slider(value = safeValue, onValueChange = onChange,
-            modifier = Modifier.semantics { contentDescription = title },
-            valueRange = range, steps = steps)
     }
 }
 

@@ -12,6 +12,8 @@ import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.graphics.drawable.Drawable
+import android.graphics.Bitmap
+import android.util.LruCache
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -21,6 +23,7 @@ import android.os.UserManager
 import android.provider.ContactsContract
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,6 +70,9 @@ class AppsRepository(context: Context) : AutoCloseable {
     private var callbackRegistered = false
     private var receiverRegistered = false
     private val iconMappings = mutableMapOf<String, Map<String, String>>()
+    private val iconBitmaps = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
 
     private val callback = object : LauncherApps.Callback() {
         override fun onPackageAdded(packageName: String, user: UserHandle) = invalidate()
@@ -109,6 +115,7 @@ class AppsRepository(context: Context) : AutoCloseable {
     fun refresh() {
         val generation = synchronized(refreshLock) {
             if (closed) return
+            iconBitmaps.evictAll()
             ++refreshGeneration
         }
         scope.launch {
@@ -239,6 +246,18 @@ class AppsRepository(context: Context) : AutoCloseable {
         }
     }.getOrDefault(emptyMap())
 
+    fun cachedIconBitmap(app: AppEntry, iconPack: String): Bitmap? = iconBitmaps.get("$iconPack|${app.key}")
+
+    fun iconBitmap(app: AppEntry, iconPack: String): Bitmap? {
+        cachedIconBitmap(app, iconPack)?.let { return it }
+        val generation = synchronized(refreshLock) { refreshGeneration }
+        val bitmap = runCatching { icon(app, iconPack)?.toBitmap(168, 168) }.getOrNull() ?: return null
+        synchronized(refreshLock) {
+            if (!closed && generation == refreshGeneration) iconBitmaps.put("$iconPack|${app.key}", bitmap)
+        }
+        return bitmap
+    }
+
     fun icon(app: AppEntry, iconPack: String = ""): Drawable? {
         if (!profileAvailable(app.user)) return null
         if (iconPack.isNotBlank()) {
@@ -302,6 +321,7 @@ class AppsRepository(context: Context) : AutoCloseable {
         if (receiverRegistered) runCatching { context.unregisterReceiver(profileReceiver) }
         synchronized(iconMappings) { iconMappings.clear() }
         scope.cancel()
+        iconBitmaps.evictAll()
     }
 
     companion object {

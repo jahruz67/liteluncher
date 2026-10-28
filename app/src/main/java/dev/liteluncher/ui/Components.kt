@@ -37,7 +37,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.graphics.drawable.toBitmap
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.AppEntry
 import dev.liteluncher.platform.AppsRepository
@@ -57,7 +56,8 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
     val context = LocalContext.current
     val override = state.overrides[app.key]
     val pack = state.prefs.appearance.iconPack
-    val bitmap by produceState<android.graphics.Bitmap?>(null, app.key, override?.iconUri, pack) {
+    val cached = if (override?.iconUri.isNullOrBlank()) repository.cachedIconBitmap(app, pack) else null
+    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, override?.iconUri, pack) {
         value = withContext(Dispatchers.IO) {
             val custom = override?.iconUri?.takeIf { it.startsWith("content://") }?.let { uri ->
                 runCatching {
@@ -70,7 +70,7 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
                     }
                 }.getOrNull()
             }
-            custom ?: runCatching { repository.icon(app, pack)?.toBitmap(144, 144) }.getOrNull()
+            custom ?: repository.iconBitmap(app, pack)
         }
     }
     val shape = iconShape(override?.shape ?: state.prefs.appearance.iconShape)
@@ -85,12 +85,13 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
 @Composable
 fun AppTile(
     app: AppEntry, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
-    badgeCount: Int, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier
+    badgeCount: Int, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier,
+    draggable: Boolean = false, dragArea: LayoutArea? = null, dragFolderId: String? = null
 ) {
     val label = state.overrides[app.key]?.label?.takeIf { it.isNotBlank() } ?: app.label
-    val iconSize = (48 * prefs.iconScale).toInt()
+    val iconSize = (56 * prefs.iconScale).toInt()
     val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
-    Column(modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    Column(modifier.clip(RoundedCornerShape(16.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick, dragFolderId)
         .padding(vertical = 8.dp, horizontal = 2.dp).semantics { contentDescription = label },
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box {
@@ -114,9 +115,10 @@ fun AppTile(
 @Composable
 fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
     onClick: () -> Unit, onLongClick: () -> Unit = {}, modifier: Modifier = Modifier) {
-    Column(modifier.clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
+    Column(modifier.clip(RoundedCornerShape(16.dp)).appDropTarget(AppDropTarget.Folder(folder.id), 3)
+        .combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        val size = (48 * prefs.iconScale).dp
+        val size = (56 * prefs.iconScale).dp
         val folderColor = parseColor(state.prefs.folders.color)
         val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
         val shape = iconShape(folder.shape ?: state.prefs.folders.shape)

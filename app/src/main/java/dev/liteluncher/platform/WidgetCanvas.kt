@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,7 +16,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -26,22 +26,22 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import dev.liteluncher.data.DesktopPrefs
 import dev.liteluncher.data.WidgetItem
 import kotlin.math.roundToInt
 
-private val CyanHandle = Color(0xFF00E5FF)
+private val ResizeColor = Color.White
 
 @Composable
 fun WidgetCanvas(
@@ -50,7 +50,8 @@ fun WidgetCanvas(
     widgets: List<WidgetItem>,
     onChange: (List<WidgetItem>) -> Unit,
     modifier: Modifier = Modifier,
-    onWidgetDeleted: ((WidgetItem) -> Unit)? = null
+    onWidgetDeleted: ((WidgetItem) -> Unit)? = null,
+    onCanvasBounds: (Rect) -> Unit = {}
 ) {
     val columns = prefs.columns.coerceIn(1, 24)
     val rows = prefs.rows.coerceIn(1, 32)
@@ -59,306 +60,189 @@ fun WidgetCanvas(
         val byId = layout.placed.associateBy { it.id }
         widgets.distinctBy { it.id }.map { byId[it.id] ?: it }
     }
+    val currentItems by rememberUpdatedState(arranged)
     val currentChange by rememberUpdatedState(onChange)
     val refreshes by controller.refreshes.collectAsState()
     var contextMenuWidget by rememberSaveable { mutableStateOf<Int?>(null) }
     var resizingWidgetId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var draft by remember { mutableStateOf<WidgetItem?>(null) }
 
     LaunchedEffect(widgets, arranged) {
         if (arranged != widgets) currentChange(arranged)
+        if (widgets.none { it.id == resizingWidgetId }) { resizingWidgetId = null; draft = null }
+    }
+    LaunchedEffect(prefs.preventChanges) {
+        if (prefs.preventChanges) { resizingWidgetId = null; draft = null; contextMenuWidget = null }
+    }
+    BackHandler(resizingWidgetId != null) { resizingWidgetId = null; draft = null }
+
+    fun remove(item: WidgetItem) {
+        currentChange(currentItems.filterNot { it.id == item.id })
+        // Keep the Android binding alive for the caller's Undo window.
+        if (onWidgetDeleted != null) onWidgetDeleted(item) else controller.remove(item.id)
+        contextMenuWidget = null
+        resizingWidgetId = null
+        draft = null
     }
 
     Column(modifier.fillMaxSize().padding(prefs.padding.coerceIn(0, 64).dp)) {
         if (layout.overflow.isNotEmpty()) {
             Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
-                Text("Some widgets do not fit this grid. Increase the grid or free space.",
-                    style = MaterialTheme.typography.bodySmall)
+                Text("Some widgets do not fit this grid. Increase the grid or free space.", style = MaterialTheme.typography.bodySmall)
                 layout.overflow.forEach { item ->
-                    TextButton(onClick = { contextMenuWidget = item.id }) { Text("Manage widget ${item.id}") }
+                    Box {
+                        TextButton(onClick = { contextMenuWidget = item.id }) { Text("Manage widget ${item.id}") }
+                        WidgetContextMenu(contextMenuWidget == item.id, false, !prefs.preventChanges, {},
+                            { controller.refresh(item.id); contextMenuWidget = null }, { remove(item) }, { contextMenuWidget = null })
+                    }
                 }
             }
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).onGloballyPositioned { onCanvasBounds(it.boundsInRoot()) }) {
             val canvasHeight = if (constraints.hasBoundedHeight) maxHeight else 640.dp
             val canvasWidth = if (constraints.hasBoundedWidth) maxWidth else 360.dp
             val cellWidth = canvasWidth / columns
             val cellHeight = canvasHeight / rows
             val gutter = 2.dp
+            SideEffect { controller.syncLayout(prefs, arranged, canvasWidth.value, canvasHeight.value) }
 
-            SideEffect {
-                controller.syncLayout(prefs, arranged, canvasWidth.value, canvasHeight.value)
+            // Behind the widgets, so dismissing the selection cannot swallow the handles.
+            if (resizingWidgetId != null) {
+                Box(Modifier.fillMaxSize().clickable { resizingWidgetId = null; draft = null })
             }
-
-            if (widgets.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Add widgets from the widget picker.", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-
-            layout.placed.forEach { item ->
-                key(item.id, refreshes[item.id] ?: 0) {
+            layout.placed.forEach { saved ->
+                key(saved.id, refreshes[saved.id] ?: 0) {
+                    val item = draft?.takeIf { it.id == saved.id } ?: saved
                     val isResizing = resizingWidgetId == item.id
+                    val provider = controller.provider(item.id)
+                    val resizeMode = provider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_NONE
+                    val minSpan = provider?.let(controller::minimumSpan) ?: (1 to 1)
+                    val maxSpan = provider?.let(controller::maximumSpan) ?: (columns to rows)
                     val itemWidth = (cellWidth * item.columns - gutter * 2).coerceAtLeast(1.dp)
                     val itemHeight = (cellHeight * item.rows - gutter * 2).coerceAtLeast(1.dp)
-                    val onEdit = { contextMenuWidget = item.id }
+                    val onEdit = { contextMenuWidget = saved.id }
                     val radius = (if (prefs.rounded) prefs.cornerRadius.coerceIn(0, 96) else 0).dp
 
-                    Box(
-                        modifier = Modifier
-                            .offset(cellWidth * item.column + gutter, cellHeight * item.row + gutter)
-                            .width(itemWidth).height(itemHeight)
-                    ) {
+                    Box(Modifier.offset(cellWidth * item.column + gutter, cellHeight * item.row + gutter)
+                        .width(itemWidth).height(itemHeight)) {
                         AndroidView(
                             factory = { context -> HostedWidgetFrame(context, controller, item.id, onEdit) },
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(radius))
-                                .then(if (isResizing) Modifier.border(BorderStroke(2.dp, CyanHandle), RoundedCornerShape(radius)) else Modifier)
+                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(radius))
+                                .then(if (isResizing) Modifier.border(BorderStroke(2.dp, ResizeColor), RoundedCornerShape(radius)) else Modifier)
                                 .semantics {
-                                    customActions = listOf(CustomAccessibilityAction("Edit widget") {
-                                        contextMenuWidget = item.id
-                                        true
-                                    })
+                                    customActions = listOf(CustomAccessibilityAction("Edit widget") { onEdit(); true })
                                 },
-                            onRelease = { it.release() },
-                            onReset = null,
-                            update = { frame ->
-                                frame.updateSize(itemWidth.value.roundToInt().coerceAtLeast(1),
-                                    itemHeight.value.roundToInt().coerceAtLeast(1), radius.value, onEdit)
-                            }
+                            onRelease = { it.release() }, onReset = null,
+                            update = { frame -> frame.updateSize(itemWidth.value.roundToInt().coerceAtLeast(1),
+                                itemHeight.value.roundToInt().coerceAtLeast(1), radius.value, onEdit) }
                         )
+                        WidgetContextMenu(contextMenuWidget == item.id,
+                            !prefs.preventChanges && resizeMode != AppWidgetProviderInfo.RESIZE_NONE, !prefs.preventChanges,
+                            { resizingWidgetId = item.id; contextMenuWidget = null },
+                            { controller.refresh(item.id); contextMenuWidget = null }, { remove(item) }, { contextMenuWidget = null })
 
-                        // 4 Cyan border pill handles when resizing with snap-to-grid internal reflow
                         if (isResizing) {
-                            val provider = controller.provider(item.id)
-                            val minSpan = provider?.let(controller::minimumSpan) ?: (1 to 1)
-                            val maxSpan = provider?.let(controller::maximumSpan) ?: (columns to rows)
-
-                            // Top Handle (pill width 36dp, height 6dp)
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopCenter)
-                                    .offset(y = (-4).dp)
-                                    .size(36.dp, 8.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CyanHandle)
-                                    .pointerInput(item.id) {
-                                        var accY = 0f
-                                        detectDragGestures { change, dragAmount ->
-                                            change.consume()
-                                            accY += dragAmount.y
-                                            val cellPx = cellHeight.toPx()
-                                            if (kotlin.math.abs(accY) >= cellPx * 0.5f) {
-                                                val step = if (accY < 0) 1 else -1
-                                                val newRow = (item.row - step).coerceIn(0, rows - 1)
-                                                val newRows = (item.rows + step).coerceIn(minSpan.second, maxSpan.second)
-                                                if (newRow >= 0 && newRow + newRows <= rows) {
-                                                    val candidate = item.copy(row = newRow, rows = newRows)
-                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
-                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
-                                                    }
-                                                }
-                                                accY = 0f
-                                            }
-                                        }
-                                    }
-                            )
-
-                            // Bottom Handle
-                            Box(
-                                Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .offset(y = 4.dp)
-                                    .size(36.dp, 8.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CyanHandle)
-                                    .pointerInput(item.id) {
-                                        var accY = 0f
-                                        detectDragGestures { change, dragAmount ->
-                                            change.consume()
-                                            accY += dragAmount.y
-                                            val cellPx = cellHeight.toPx()
-                                            if (kotlin.math.abs(accY) >= cellPx * 0.5f) {
-                                                val step = if (accY > 0) 1 else -1
-                                                val newRows = (item.rows + step).coerceIn(minSpan.second, maxSpan.second)
-                                                if (item.row + newRows <= rows) {
-                                                    val candidate = item.copy(rows = newRows)
-                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
-                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
-                                                    }
-                                                }
-                                                accY = 0f
-                                            }
-                                        }
-                                    }
-                            )
-
-                            // Left Handle
-                            Box(
-                                Modifier
-                                    .align(Alignment.CenterStart)
-                                    .offset(x = (-4).dp)
-                                    .size(8.dp, 36.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CyanHandle)
-                                    .pointerInput(item.id) {
-                                        var accX = 0f
-                                        detectDragGestures { change, dragAmount ->
-                                            change.consume()
-                                            accX += dragAmount.x
-                                            val cellPx = cellWidth.toPx()
-                                            if (kotlin.math.abs(accX) >= cellPx * 0.5f) {
-                                                val step = if (accX < 0) 1 else -1
-                                                val newCol = (item.column - step).coerceIn(0, columns - 1)
-                                                val newCols = (item.columns + step).coerceIn(minSpan.first, maxSpan.first)
-                                                if (newCol >= 0 && newCol + newCols <= columns) {
-                                                    val candidate = item.copy(column = newCol, columns = newCols)
-                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
-                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
-                                                    }
-                                                }
-                                                accX = 0f
-                                            }
-                                        }
-                                    }
-                            )
-
-                            // Right Handle
-                            Box(
-                                Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .offset(x = 4.dp)
-                                    .size(8.dp, 36.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(CyanHandle)
-                                    .pointerInput(item.id) {
-                                        var accX = 0f
-                                        detectDragGestures { change, dragAmount ->
-                                            change.consume()
-                                            accX += dragAmount.x
-                                            val cellPx = cellWidth.toPx()
-                                            if (kotlin.math.abs(accX) >= cellPx * 0.5f) {
-                                                val step = if (accX > 0) 1 else -1
-                                                val newCols = (item.columns + step).coerceIn(minSpan.first, maxSpan.first)
-                                                if (item.column + newCols <= columns) {
-                                                    val candidate = item.copy(columns = newCols)
-                                                    if (WidgetGrid.fits(candidate, layout.placed, columns, rows)) {
-                                                        currentChange(arranged.map { if (it.id == item.id) candidate else it })
-                                                    }
-                                                }
-                                                accX = 0f
-                                            }
-                                        }
-                                    }
-                            )
-
-
+                            // Capture the drag on top of the native widget; ordinary widget touches stay native outside edit mode.
+                            Box(Modifier.fillMaxSize().widgetGridDrag(item, cellWidth.value, cellHeight.value,
+                                onPreview = { origin, delta ->
+                                    val candidate = origin.copy(
+                                        column = (origin.column + delta.first).coerceIn(0, columns - origin.columns),
+                                        row = (origin.row + delta.second).coerceIn(0, rows - origin.rows))
+                                    if (WidgetGrid.fits(candidate, currentItems, columns, rows)) draft = candidate
+                                }, onCommit = {
+                                    draft?.let { changed -> currentChange(currentItems.map { if (it.id == changed.id) changed else it }) }
+                                    draft = null
+                                }, onCancel = { draft = null }))
+                            ResizeEdge.entries.filter { edge ->
+                                val axis = if (edge == ResizeEdge.LEFT || edge == ResizeEdge.RIGHT)
+                                    AppWidgetProviderInfo.RESIZE_HORIZONTAL else AppWidgetProviderInfo.RESIZE_VERTICAL
+                                resizeMode and axis != 0
+                            }.forEach { edge ->
+                                val horizontal = edge == ResizeEdge.TOP || edge == ResizeEdge.BOTTOM
+                                val alignment = when (edge) {
+                                    ResizeEdge.TOP -> Alignment.TopCenter
+                                    ResizeEdge.BOTTOM -> Alignment.BottomCenter
+                                    ResizeEdge.LEFT -> Alignment.CenterStart
+                                    ResizeEdge.RIGHT -> Alignment.CenterEnd
+                                }
+                                Box(Modifier.align(alignment)
+                                    .offset(x = when (edge) { ResizeEdge.LEFT -> (-16).dp; ResizeEdge.RIGHT -> 16.dp; else -> 0.dp },
+                                        y = when (edge) { ResizeEdge.TOP -> (-16).dp; ResizeEdge.BOTTOM -> 16.dp; else -> 0.dp })
+                                    .size(32.dp)
+                                    .widgetGridDrag(item, cellWidth.value, cellHeight.value,
+                                        onPreview = { origin, delta ->
+                                            val candidate = resizeWidget(origin, edge, delta, minSpan, maxSpan, columns, rows)
+                                            if (candidate != null && WidgetGrid.fits(candidate, currentItems, columns, rows)) draft = candidate
+                                        }, onCommit = {
+                                            draft?.let { changed -> currentChange(currentItems.map { if (it.id == changed.id) changed else it }) }
+                                            draft = null
+                                        }, onCancel = { draft = null }),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(Modifier.size(if (horizontal) 18.dp else 6.dp, if (horizontal) 6.dp else 18.dp)
+                                        .background(ResizeColor, RoundedCornerShape(4.dp)))
+                                }
+                            }
                         }
                     }
-                }
-
-                // Tap outside widget bounds to confirm and exit resize mode
-                if (resizingWidgetId != null) {
-                    Box(Modifier.fillMaxSize().clickable { resizingWidgetId = null })
                 }
             }
         }
     }
+}
 
-    // Long-Press Context Card: Resize, Refresh, Remove
-    val selectedItem = arranged.firstOrNull { it.id == contextMenuWidget }
-    if (selectedItem != null) {
-        WidgetContextMenuDialog(
-            item = selectedItem,
-            onResize = {
-                resizingWidgetId = selectedItem.id
-                contextMenuWidget = null
-            },
-            onRefresh = {
-                controller.refresh(selectedItem.id)
-                contextMenuWidget = null
-            },
-            onRemove = {
-                currentChange(arranged.filterNot { it.id == selectedItem.id })
-                controller.remove(selectedItem.id)
-                onWidgetDeleted?.invoke(selectedItem)
-                contextMenuWidget = null
-            },
-            onDismiss = { contextMenuWidget = null }
+private enum class ResizeEdge { TOP, BOTTOM, LEFT, RIGHT }
+
+private fun resizeWidget(
+    origin: WidgetItem, edge: ResizeEdge, delta: Pair<Int, Int>,
+    minimum: Pair<Int, Int>, maximum: Pair<Int, Int>, columns: Int, rows: Int
+): WidgetItem? {
+    val left = if (edge == ResizeEdge.LEFT) origin.column + delta.first else origin.column
+    val top = if (edge == ResizeEdge.TOP) origin.row + delta.second else origin.row
+    val right = origin.column + origin.columns + if (edge == ResizeEdge.RIGHT) delta.first else 0
+    val bottom = origin.row + origin.rows + if (edge == ResizeEdge.BOTTOM) delta.second else 0
+    if (left < 0 || top < 0 || right > columns || bottom > rows ||
+        right - left !in minimum.first..maximum.first || bottom - top !in minimum.second..maximum.second) return null
+    return origin.copy(column = left, row = top, columns = right - left, rows = bottom - top)
+}
+
+@Composable
+private fun Modifier.widgetGridDrag(
+    item: WidgetItem, cellWidthDp: Float, cellHeightDp: Float,
+    onPreview: (WidgetItem, Pair<Int, Int>) -> Unit, onCommit: () -> Unit, onCancel: () -> Unit
+): Modifier {
+    val latestItem by rememberUpdatedState(item)
+    val preview by rememberUpdatedState(onPreview)
+    val commit by rememberUpdatedState(onCommit)
+    val cancel by rememberUpdatedState(onCancel)
+    return pointerInput(item.id, cellWidthDp, cellHeightDp) {
+        var origin = latestItem
+        var distance = Offset.Zero
+        detectDragGestures(
+            onDragStart = { origin = latestItem; distance = Offset.Zero },
+            onDragEnd = { commit() }, onDragCancel = { cancel() },
+            onDrag = { change, amount ->
+                change.consume()
+                distance += amount
+                preview(origin, (distance.x / (cellWidthDp * density)).roundToInt() to
+                    (distance.y / (cellHeightDp * density)).roundToInt())
+            }
         )
     }
 }
 
 @Composable
-private fun WidgetContextMenuDialog(
-    item: WidgetItem,
-    onResize: () -> Unit,
-    onRefresh: () -> Unit,
-    onRemove: () -> Unit,
-    onDismiss: () -> Unit
+private fun WidgetContextMenu(
+    expanded: Boolean, canResize: Boolean, canRemove: Boolean,
+    onResize: () -> Unit, onRefresh: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF282828),
-            contentColor = Color.White,
-            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
-            modifier = Modifier.width(260.dp)
-        ) {
-            Column(Modifier.padding(vertical = 8.dp)) {
-                Text(
-                    text = "Widget options",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = Color(0xFF3B82F6)
-                )
-                HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.5.dp)
-
-                // Resize
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onResize)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Rounded.AspectRatio, null, tint = CyanHandle, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("Resize", fontSize = 14.sp)
-                }
-
-                HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
-
-                // Refresh
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onRefresh)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Rounded.Refresh, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("Refresh", fontSize = 14.sp)
-                }
-
-                HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
-
-                // Remove
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onRemove)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Rounded.DeleteOutline, null, tint = Color(0xFFFF5252), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("Remove", fontSize = 14.sp, color = Color(0xFFFF5252))
-                }
-            }
-        }
+    DropdownMenu(expanded, onDismiss, containerColor = Color(0xFF253238)) {
+        DropdownMenuItem(text = { Text("Resize", color = Color.White) }, onClick = onResize, enabled = canResize,
+            leadingIcon = { Icon(Icons.Rounded.AspectRatio, null, tint = Color.White) })
+        DropdownMenuItem(text = { Text("Refresh", color = Color.White) }, onClick = onRefresh,
+            leadingIcon = { Icon(Icons.Rounded.Refresh, null, tint = Color.White) })
+        DropdownMenuItem(text = { Text("Remove", color = Color.White) }, onClick = onRemove, enabled = canRemove,
+            leadingIcon = { Icon(Icons.Rounded.Close, null, tint = Color.White) })
     }
 }
 
