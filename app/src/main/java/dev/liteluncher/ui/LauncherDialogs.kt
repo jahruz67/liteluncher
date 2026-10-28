@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -20,6 +21,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.InfoOutline
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ViewCarousel
+import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,6 +39,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -46,6 +55,10 @@ import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+private val MenuBackground = Color(0xFF282E2F)
+private val MenuText = Color(0xFFBFC1C1)
+private val MenuIcon = Color(0xFFE3E6E5)
 
 /** An in-window menu keeps the original icon's touch sequence alive for dragging. */
 @Composable
@@ -77,62 +90,16 @@ fun AppContextMenu(
 
     AnchoredIconMenu(anchor, onDismiss) {
         Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF282828),
-            contentColor = Color.White,
-            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+            shape = RoundedCornerShape(10.dp),
+            color = MenuBackground,
+            contentColor = MenuText,
+            shadowElevation = 8.dp,
             modifier = Modifier.width(224.dp).heightIn(max = 360.dp)
         ) {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
-                // Header: App Icon and Title
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    AppIcon(app, repository, state, 24)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        maxLines = 1
-                    )
-                }
-
-                HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.5.dp)
-
-                // Top launcher actions: Edit, App-Info, Remove
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onEdit() }.padding(8.dp)
-                    ) {
-                        Icon(Icons.Rounded.Edit, null, tint = Cerulean, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.height(4.dp))
-                        Text("Edit", fontSize = 11.sp)
-                    }
-
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { repository.appInfo(app); onDismiss() }.padding(8.dp)
-                    ) {
-                        Icon(Icons.Rounded.Info, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.height(4.dp))
-                        Text("App-Info", fontSize = 11.sp)
-                    }
-
-                    if (removable) Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onRemove).padding(8.dp)
-                    ) {
-                        Icon(Icons.Rounded.DeleteOutline, null, tint = Color(0xFFFF5252), modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.height(4.dp))
-                        Text("Remove", fontSize = 11.sp, color = Color(0xFFFF5252))
-                    }
-                }
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                ActionRowItem("Edit", Icons.Default.Edit, onEdit)
+                ActionRowItem("App-Info", Icons.Default.InfoOutline, { repository.appInfo(app); onDismiss() })
+                if (removable) ActionRowItem("Remove", Icons.Default.Close, onRemove)
 
                 if (app.key !in state.homeApps && !state.prefs.home.preventChanges) {
                     ActionRowItem("Add to Home", Icons.Rounded.AddToHomeScreen, {
@@ -188,9 +155,9 @@ fun AppContextMenu(
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Rounded.Shortcut, null, tint = Cerulean, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Rounded.Shortcut, null, tint = MenuIcon, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(12.dp))
-                                Text(shortcut.label, fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                                Text(shortcut.label, fontSize = 16.sp, color = MenuText, maxLines = 1, modifier = Modifier.weight(1f))
                                 IconButton(
                                     onClick = {
                                         val serial = requireNotNull(context.getSystemService(UserManager::class.java)).getSerialNumberForUser(shortcut.user)
@@ -226,21 +193,39 @@ private fun AnchoredIconMenu(anchor: Rect, onDismiss: () -> Unit, content: @Comp
         Box(Modifier.fillMaxSize().clickable(
             interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss
         ))
-        Layout(content = content, modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)
+        Layout(content = {
+            content()
+            Canvas(Modifier.size(width = 24.dp, height = 12.dp)) {
+                drawPath(Path().apply {
+                    moveTo(0f, 0f)
+                    lineTo(size.width, 0f)
+                    lineTo(size.width / 2, size.height)
+                    close()
+                }, MenuBackground)
+            }
+        }, modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 8.dp)
             .onGloballyPositioned { origin = it.positionInRoot() }) { measurables, constraints ->
-            val menu = measurables.single().measure(constraints.copy(minWidth = 0, minHeight = 0))
-            val gap = 8.dp.roundToPx()
+            val pointer = measurables[1].measure(constraints.copy(minWidth = 0, minHeight = 0))
+            val menu = measurables[0].measure(constraints.copy(minWidth = 0, minHeight = 0,
+                maxHeight = (constraints.maxHeight - pointer.height).coerceAtLeast(0)))
+            val height = menu.height + pointer.height
+            val gap = 2.dp.roundToPx()
             val localAnchor = anchor.translate(-origin)
             val x = (localAnchor.center.x.toInt() - menu.width / 2).coerceIn(0, constraints.maxWidth - menu.width)
-            val above = localAnchor.top.toInt() - gap - menu.height
+            val above = localAnchor.top.toInt() - gap - height
             val below = localAnchor.bottom.toInt() + gap
-            val y = when {
-                above >= 0 -> above
-                below + menu.height <= constraints.maxHeight -> below
-                localAnchor.top > constraints.maxHeight - localAnchor.bottom -> above
-                else -> below
-            }.coerceIn(0, constraints.maxHeight - menu.height)
-            layout(constraints.maxWidth, constraints.maxHeight) { menu.place(x, y) }
+            val placeAbove = above >= 0 || (below + height > constraints.maxHeight &&
+                localAnchor.top > constraints.maxHeight - localAnchor.bottom)
+            val y = (if (placeAbove) above else below).coerceIn(0, constraints.maxHeight - height)
+            val pointerInset = minOf(16.dp.roundToPx(), (menu.width - pointer.width).coerceAtLeast(0) / 2)
+            val pointerX = (localAnchor.center.x.toInt() - x - pointer.width / 2)
+                .coerceIn(pointerInset, (menu.width - pointer.width - pointerInset).coerceAtLeast(pointerInset))
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                menu.place(x, if (placeAbove) y else y + pointer.height)
+                pointer.placeWithLayer(x + pointerX, if (placeAbove) y + menu.height else y) {
+                    rotationZ = if (placeAbove) 0f else 180f
+                }
+            }
         }
     }
 }
@@ -257,31 +242,17 @@ fun EmptySpaceMenuDialog(
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF282828),
-            contentColor = Color.White,
-            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+            shape = RoundedCornerShape(10.dp),
+            color = MenuBackground,
+            contentColor = MenuText,
+            shadowElevation = 8.dp,
             modifier = Modifier.width(280.dp)
         ) {
-            Column(Modifier.padding(vertical = 8.dp)) {
-                Text(
-                    text = "Lite Luncher",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    color = Cerulean,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-                HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.5.dp)
-
-                ActionRowItem("Change Wallpaper", Icons.Rounded.Wallpaper, onWallpaper)
-                HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
-
-                ActionRowItem("Add Widget", Icons.Rounded.Widgets, onAddWidget)
-                HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
-
-                if (showSettings) ActionRowItem("Settings", Icons.Rounded.Tune, onSettings)
-                HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
-                ActionRowItem("Manage Layout", Icons.Rounded.DashboardCustomize, onManageLayout)
+            Column {
+                ActionRowItem("Change Wallpaper", Icons.Default.Wallpaper, onWallpaper)
+                ActionRowItem("Add Widget", Icons.Default.Widgets, onAddWidget)
+                if (showSettings) ActionRowItem("Settings", Icons.Default.Settings, onSettings)
+                ActionRowItem("Manage Layout", Icons.Default.ViewCarousel, onManageLayout)
             }
         }
     }
@@ -292,13 +263,14 @@ private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vect
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = if (compact) 40.dp else 48.dp)
             .clickable(onClick = onClick)
-            .padding(horizontal = if (compact) 12.dp else 16.dp, vertical = if (compact) 8.dp else 12.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = Cerulean, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(14.dp))
-        Text(label, fontSize = if (compact) 12.sp else 14.sp, color = Color.White)
+        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(if (compact) 24.dp else 28.dp))
+        Spacer(Modifier.width(22.dp))
+        Text(label, fontSize = if (compact) 16.sp else 20.sp, fontWeight = FontWeight.Normal, color = MenuText)
     }
 }
 
@@ -483,7 +455,7 @@ fun FolderOverlay(
 @Composable
 internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean, onEdit: () -> Unit, onDismiss: () -> Unit, onRemove: () -> Unit = {}) {
     AnchoredIconMenu(anchor, onDismiss) {
-        Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF282828), modifier = Modifier.width(224.dp)) {
+        Surface(shape = RoundedCornerShape(10.dp), color = MenuBackground, shadowElevation = 8.dp, modifier = Modifier.width(224.dp)) {
             Column(Modifier.padding(12.dp)) {
                 Text(folder.name, color = Color.White)
                 if (!locked) ActionRowItem("Edit folder", Icons.Rounded.Edit, onEdit)
