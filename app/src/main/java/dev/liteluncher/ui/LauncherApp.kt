@@ -38,9 +38,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
@@ -62,10 +59,7 @@ import dev.liteluncher.settings.SettingsScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 
@@ -81,7 +75,9 @@ data class WorkspaceActions(
     val requestContacts: () -> Unit,
     val update: ((LauncherState) -> LauncherState) -> Unit,
     val dockMenu: (AppEntry) -> Unit = menu,
-    val folderMenu: (AppEntry) -> Unit = menu
+    val folderMenu: (AppEntry) -> Unit = menu,
+    val editFolder: (FolderItem) -> Unit = {},
+    val folderActions: (FolderItem) -> Unit = editFolder
 )
 
 @Composable
@@ -108,14 +104,12 @@ fun LauncherApp(
     var appMenuFromDock by remember { mutableStateOf(false) }
     var editApp by remember { mutableStateOf<AppEntry?>(null) }
     var folder by remember { mutableStateOf<FolderItem?>(null) }
+    var editingFolder by remember { mutableStateOf<FolderItem?>(null) }
+    var folderMenu by remember { mutableStateOf<FolderItem?>(null) }
     var folderFromDock by remember { mutableStateOf(false) }
     var emptyMenu by remember { mutableStateOf(false) }
     var widgetPicker by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    val scrollEvents = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST) }
-    var scrolling by remember { mutableStateOf(false) }
-    var dockAwake by remember { mutableStateOf(true) }
-    var dockWakeSignal by remember { mutableIntStateOf(0) }
     var usage by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
     var iconPacks by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
@@ -145,8 +139,9 @@ fun LauncherApp(
             keyboard?.hide()
         }
         manager.navigate(screen, state.prefs.navigation)
-        dockWakeSignal++
         folder = null
+        folderMenu = null
+        editingFolder = null
     }
 
     fun perform(binding: GestureBinding) {
@@ -181,7 +176,9 @@ fun LauncherApp(
         },
         folder = { item, dock -> folder = item; folderFromDock = dock }, requestContacts = onContacts, update = model.store::update,
         dockMenu = { appMenuFromDock = true; appMenuScreen = manager.current; appMenu = it },
-        folderMenu = { appMenuFromDock = false; appMenuScreen = Screen.APPS; appMenu = it }
+        folderMenu = { appMenuFromDock = false; appMenuScreen = Screen.APPS; appMenu = it },
+        editFolder = { editingFolder = it },
+        folderActions = { folderMenu = it }
     )
 
     fun finishWidgetRemoval() {
@@ -222,6 +219,7 @@ fun LauncherApp(
     }
     val onAppDrop: (DraggedApp, AppDropTarget) -> Unit = { item, target ->
         fun place(current: LauncherState): LayoutEditResult {
+            if (item.movingFolderId != null) return applyFolderDrop(current, item.movingFolderId, item.source, target)
             if (target is AppDropTarget.Area) {
                 if (target.area == LayoutArea.DOCK && !current.prefs.dock.enabled && item.source != LayoutArea.DOCK)
                     return LayoutEditResult(current, "Enable Dock in Settings before dropping apps there")
@@ -234,7 +232,7 @@ fun LauncherApp(
         when {
             apps.none { it.key == item.app.key } -> toast("This app is no longer available")
             result.error != null -> toast(result.error)
-            target == AppDropTarget.Remove && item.source != null -> removeEntry(item.app.key, item.source)
+            target == AppDropTarget.Remove && item.source != null && item.movingFolderId == null -> removeEntry(item.app.key, item.source)
             else -> {
                 model.store.update { place(it).state }
                 val targetArea = when (target) {
@@ -255,7 +253,7 @@ fun LauncherApp(
         }
     }
     val latestDrop by rememberUpdatedState(onAppDrop)
-    val drag = remember { AppDragController(onDragStart = { appMenu = null }) { item, target -> latestDrop(item, target) } }
+    val drag = remember { AppDragController(onDragStart = { appMenu = null; folderMenu = null }) { item, target -> latestDrop(item, target) } }
     LaunchedEffect(panel) { drag.cancel() }
 
     LaunchedEffect(ready, apps) {
@@ -287,6 +285,7 @@ fun LauncherApp(
         if (homeSignal > 0) {
             drag.cancel()
             panel = ""; appMenu = null; editApp = null; folder = null; emptyMenu = false; widgetPicker = false
+            folderMenu = null; editingFolder = null
             query = ""
             focusManager.clearFocus(force = true)
             keyboard?.hide()
@@ -303,19 +302,6 @@ fun LauncherApp(
     LaunchedEffect(state.prefs.desktop.pageCount) {
         currentDesktopPage = currentDesktopPage.coerceIn(0, state.prefs.desktop.pageCount.coerceAtLeast(1) - 1)
     }
-    LaunchedEffect(state.prefs.dock.enabled, state.prefs.dock.hideOnScroll) {
-        scrolling = false
-        if (state.prefs.dock.enabled && state.prefs.dock.hideOnScroll) scrollEvents.collectLatest {
-            scrolling = true
-            delay(650)
-            scrolling = false
-        }
-    }
-    LaunchedEffect(manager.current, state.prefs.dock.autoHide, dockWakeSignal, drag.active != null) {
-        dockAwake = true
-        if (state.prefs.dock.autoHide && drag.active == null) { delay(3500); dockAwake = false }
-    }
-
     // Auto-dismiss deletion snackbar after 4 seconds
     LaunchedEffect(snackbarVisible, undoSignal) {
         if (snackbarVisible) {
@@ -369,12 +355,7 @@ fun LauncherApp(
         when { folder != null -> folder = null; panel.isNotEmpty() -> panel = ""; else -> { query = ""; navigate(Screen.HOME) } }
     }
     BackHandler(enabled = drag.active != null) { drag.cancel() }
-    val nestedScroll = remember { object : NestedScrollConnection {
-        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-            if (available.getDistance() > 1f) scrollEvents.tryEmit(Unit)
-            return Offset.Zero
-        }
-    } }
+
 
     LauncherTheme(state.prefs.appearance) {
         val launcherSurface = state.prefs.appearance.launcher
@@ -428,9 +409,7 @@ fun LauncherApp(
                             when (panel) {
                                 "settings" -> SettingsScreen(state, apps, iconPacks, model.store::update, { panel = "" }, { screenManagerReturn = "settings"; panel = "screens" }, onExport, onImport,
                                     onDefaultHome, { SystemActions.notificationAccess(context) }, { SystemActions.usageAccess(context) }, onContacts)
-                                "layout" -> ManageLayoutScreen(state, apps, model.apps, model.store::update, { panel = "" },
-                                    onManageScreens = { screenManagerReturn = "layout"; panel = "screens" },
-                                    onRemoveApp = { area, key -> removeEntry(key, area) })
+                                "layout" -> ManageLayoutScreen { panel = "" }
                             }
                         }
                     }
@@ -465,7 +444,6 @@ fun LauncherApp(
                         }.filterNotNull().collect { screen ->
                             if (screen != manager.current) {
                                 manager.onPageSettled(screen, state.prefs.navigation)
-                                dockWakeSignal++
                                 folder = null
                             }
                         }
@@ -499,21 +477,17 @@ fun LauncherApp(
                             val binding = state.prefs.gestures[gesture] ?: GestureBinding()
                             if (binding.action == Action.NONE || binding.action == Action.NAVIGATE) manager.swipe(direction, state.prefs.navigation)
                             else perform(binding)
-                            dockWakeSignal++
                             folder = null
                         },
                         onPinch = { inward -> perform(state.prefs.gestures[if (inward) Gesture.PINCH_IN else Gesture.PINCH_OUT] ?: GestureBinding()) }
                     )
 
-                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).then(gestureModifier).nestedScroll(nestedScroll)) {
+                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).then(gestureModifier)) {
                         if (storageError != null) Text(storageError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
                             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
 
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
-                            val dockInset = if (screen == Screen.FAVORITES && state.prefs.dock.enabled) (56 * state.prefs.dock.iconScale + 12).dp else 0.dp
                             Box(Modifier.fillMaxSize()
-                                .padding(start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
-                                    end = if (state.prefs.dock.side == "Right") dockInset else 0.dp)
                             ) {
                                 when (screen) {
                                     Screen.HOME -> HomeScreen(
@@ -648,21 +622,10 @@ fun LauncherApp(
                         Spacer(Modifier.height(8.dp))
                     }
 
-                    val dockShown = state.prefs.dock.enabled &&
-                        (manager.current in listOf(Screen.HOME, Screen.FAVORITES) || drag.active != null) &&
-                        (drag.active != null || dockAwake && !(scrolling && state.prefs.dock.hideOnScroll))
-                    AnimatedVisibility(
-                        visible = dockShown,
-                        enter = fadeIn() + slideInHorizontally { if (state.prefs.dock.side == "Left") -it else it },
-                        exit = fadeOut() + slideOutHorizontally { if (state.prefs.dock.side == "Left") -it else it },
-                        modifier = Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)
-                    ) {
-                        FloatingDock(state, apps, model.apps, badges, actions)
-                    }
-                    if (state.prefs.dock.enabled && !dockShown && manager.current in listOf(Screen.HOME, Screen.FAVORITES)) {
-                        Box(Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)
-                            .width(16.dp).height(80.dp).clip(RoundedCornerShape(8.dp))
-                            .background(foreground.copy(alpha = .18f)).clickable { dockWakeSignal++ })
+                    if (state.prefs.dock.enabled && manager.current == Screen.HOME) {
+                        Box(Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)) {
+                            FloatingDock(state, apps, model.apps, badges, actions)
+                        }
                     }
 
 
@@ -671,6 +634,22 @@ fun LauncherApp(
                 val currentFolder = folder?.let { selected -> state.folders.find { it.id == selected.id } }
                 if (currentFolder != null) {
                     FolderOverlay(currentFolder, folderFromDock, state, apps, model.apps, actions.copy(menu = actions.folderMenu), { folder = null })
+                }
+                folderMenu?.let { selected ->
+                    FolderContextMenu(selected, drag.menuAnchor, state.folderLocked(selected.id), {
+                        folderMenu = null
+                        editingFolder = selected
+                    }, { folderMenu = null })
+                }
+                editingFolder?.let { selected ->
+                    FolderEditor(selected, apps, { edited ->
+                        model.store.update { current ->
+                            if (current.folderLocked(edited.id)) current else current.copy(folders = current.folders.map {
+                                if (it.id == edited.id) it.copy(name = edited.name, apps = edited.apps) else it
+                            })
+                        }
+                        editingFolder = null
+                    }, { editingFolder = null })
                 }
                 DeletionSnackbar(snackbarVisible, snackbarMessage, undoRemoval, Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
                 AppDragOverlay(drag, state, model.apps)
@@ -738,15 +717,26 @@ private fun FloatingDock(
 ) {
     val prefs = state.prefs.dock
     val isRight = prefs.side == "Right"
-    val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }.take(prefs.maxItems)
-    val folders = state.dockFolders.mapNotNull { id -> state.folders.find { it.id == id } }.take((prefs.maxItems - entries.size).coerceAtLeast(0))
+    val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }
+    val drag = LocalAppDrag.current
+    val target = drag?.hovered?.target as? AppDropTarget.Area
+    val hovering = !prefs.preventChanges && target?.area == LayoutArea.DOCK && drag?.active?.movingFolderId == null
+    val movingKey = drag?.active?.app?.key
+    val from = entries.indexOfFirst { it.key == movingKey }
+    val to = entries.indexOfFirst { it.key == target?.atKey }.let { if (it < 0) entries.size else it }
+    val preview = if (hovering && from >= 0) entries.moveLayoutItem(from, to.coerceAtMost(entries.lastIndex)) else entries
+    val gap = hovering && from < 0
+    val dockScroll = rememberScrollState()
+    val scrollOffset = with(androidx.compose.ui.platform.LocalDensity.current) { dockScroll.value.toDp() }
+    val folders = state.dockFolders.mapNotNull { id -> state.folders.find { it.id == id } }
     val dockWidth = (56 * prefs.iconScale + 12).dp.coerceAtLeast(56.dp)
     val theme = state.prefs.appearance.dock
     val shape = if (isRight) RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp)
         else RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
     BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth).windowInsetsPadding(WindowInsets.safeDrawing)
         .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)) {
-        val totalItems = entries.size + folders.size + if (prefs.allApps) 1 else 0
+        val totalItems = entries.size + folders.size + (if (prefs.allApps) 1 else 0) + (if (gap) 1 else 0)
+        val itemHeight = (56 * prefs.iconScale + if (prefs.labels) 36 else 16).dp
         val estimatedHeight = (totalItems.coerceAtLeast(1) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
         val height = if (prefs.fullWidth) maxHeight else estimatedHeight
         val top = ((maxHeight - height) * prefs.alignment).coerceAtLeast(0.dp)
@@ -754,7 +744,7 @@ private fun FloatingDock(
             Column(
                 Modifier.offset(y = top).width(dockWidth).height(height).clip(shape)
                     .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
-                    .verticalScroll(rememberScrollState()).padding(vertical = prefs.padding.dp),
+                    .verticalScroll(dockScroll).padding(vertical = prefs.padding.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 val grid = GridPrefs(iconScale = prefs.iconScale, labels = prefs.labels, textScale = .9f)
@@ -764,19 +754,32 @@ private fun FloatingDock(
                     }
                 }
                 if (prefs.allApps && prefs.allAppsLeft) allAppsButton()
-                entries.forEach { app ->
-                    AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0,
-                        { actions.launch(app) }, { actions.dockMenu(app) }, Modifier.fillMaxWidth(),
-                        draggable = !prefs.preventChanges, dragArea = LayoutArea.DOCK)
+                preview.forEachIndexed { index, app ->
+                    if (gap && index == to) Spacer(Modifier.height(itemHeight))
+                    key(app.key) {
+                        AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0,
+                            { actions.launch(app) }, { actions.dockMenu(app) }, Modifier.fillMaxWidth().height(itemHeight),
+                            draggable = !prefs.preventChanges, dragArea = LayoutArea.DOCK)
+                    }
                 }
+                if (gap && to == entries.size) Spacer(Modifier.height(itemHeight))
                 folders.forEach { item ->
                     FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) },
-                        actions.manageLayout, Modifier.fillMaxWidth())
+                        { actions.folderActions(item) }, Modifier.fillMaxWidth())
                 }
                 if (prefs.allApps && !prefs.allAppsLeft) allAppsButton()
-                if (totalItems == 0) IconButton(onClick = actions.manageLayout) {
+                if (totalItems == 0) IconButton(onClick = { actions.navigate(Screen.APPS) }) {
                     Icon(Icons.Rounded.Add, "Add apps to dock")
                 }
+            }
+        }
+        // Stable hit regions prevent the preview gap from moving its own drop target.
+        if (drag?.active != null && !prefs.preventChanges) {
+            entries.forEachIndexed { index, app ->
+                Box(Modifier.offset(y = top + prefs.padding.dp + itemHeight * index - scrollOffset +
+                    (if (prefs.allApps && prefs.allAppsLeft) (56 * prefs.iconScale + 16).dp else 0.dp))
+                    .width(dockWidth).height(itemHeight)
+                    .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK, app.key), 2))
             }
         }
     }

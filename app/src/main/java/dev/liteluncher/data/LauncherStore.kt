@@ -360,7 +360,7 @@ class LauncherStore(context: Context) {
                 shortcuts = shortcuts, overrides = overrides, launches = launches,
                 history = value.history.asSequence().map { text(it, MAX_HISTORY_LENGTH) }
                     .filter { it.isNotEmpty() }.distinctBy { it.lowercase(Locale.ROOT) }.take(MAX_HISTORY).toList()
-            )
+            ).collapseSmallFolders()
         }
 
         fun sanitizePrefs(value: LauncherPrefs): LauncherPrefs {

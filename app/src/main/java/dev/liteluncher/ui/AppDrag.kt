@@ -9,6 +9,8 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -30,7 +32,7 @@ import dev.liteluncher.platform.AppEntry
 import dev.liteluncher.platform.AppsRepository
 import kotlin.math.roundToInt
 
-internal data class DraggedApp(val app: AppEntry, val source: LayoutArea?, val token: Any, val folderId: String?)
+internal data class DraggedApp(val app: AppEntry, val source: LayoutArea?, val token: Any, val folderId: String?, val movingFolderId: String? = null)
 internal data class AppDropRegion(val bounds: Rect, val target: AppDropTarget, val priority: Int)
 
 internal class AppDragController(private val onDragStart: () -> Unit, private val onDrop: (DraggedApp, AppDropTarget) -> Unit) {
@@ -43,15 +45,20 @@ internal class AppDragController(private val onDragStart: () -> Unit, private va
     private var start = Offset.Zero
     private var slop = 0f
     val regions = mutableStateMapOf<Any, AppDropRegion>()
+    val dismissedFolders = mutableStateListOf<String>()
     val hovered by derivedStateOf {
-        if (active == null) null else regions.values.filter { it.bounds.contains(position) }.maxByOrNull { it.priority }
+        if (active == null) null else regions.values.filter {
+            val folder = it.target as? AppDropTarget.Folder
+            it.bounds.contains(position) && (folder == null || folder.id !in dismissedFolders)
+        }.maxByOrNull { it.priority }
     }
 
-    fun begin(app: AppEntry, source: LayoutArea?, token: Any, point: Offset, touchSlop: Float, folderId: String?) {
+    fun begin(app: AppEntry, source: LayoutArea?, token: Any, point: Offset, touchSlop: Float, folderId: String?, movingFolderId: String? = null) {
         start = point
         position = point
         slop = touchSlop
-        held = DraggedApp(app, source, token, folderId)
+        dismissedFolders.clear()
+        held = DraggedApp(app, source, token, folderId, movingFolderId)
         active = null
     }
 
@@ -61,6 +68,13 @@ internal class AppDragController(private val onDragStart: () -> Unit, private va
         if (active == null && (position - start).getDistance() > slop) {
             active = item
             onDragStart()
+        }
+        val sourceFolder = item.folderId
+        if (active != null && sourceFolder != null && sourceFolder !in dismissedFolders) {
+            val container = regions.values.firstOrNull {
+                it.priority == 4 && (it.target as? AppDropTarget.Folder)?.id == sourceFolder
+            }
+            if (container != null && !container.bounds.contains(position)) dismissedFolders.add(sourceFolder)
         }
     }
 
@@ -99,7 +113,7 @@ internal fun Modifier.appDropTarget(target: AppDropTarget, priority: Int = 0, ce
 @Composable
 internal fun Modifier.appIconGestures(
     app: AppEntry, area: LayoutArea?, enabled: Boolean,
-    onClick: (() -> Unit)?, onMenu: (() -> Unit)?, folderId: String? = null
+    onClick: (() -> Unit)?, onMenu: (() -> Unit)?, folderId: String? = null, movingFolderId: String? = null
 ): Modifier {
     val drag = LocalAppDrag.current
     if (drag == null) return if (onClick == null && onMenu == null) this
@@ -113,8 +127,9 @@ internal fun Modifier.appIconGestures(
     if (!enabled) return onGloballyPositioned { bounds.value = it.boundsInRoot() }
         .combinedClickable(onClick = onClick ?: {}, onLongClick = if (onMenu != null) showMenu else null)
     DisposableEffect(drag, token) { onDispose { drag.cancel(token) } }
-    val target: AppDropTarget? = if (folderId != null) AppDropTarget.Folder(folderId, app.key) else area?.let { AppDropTarget.Area(it, app.key) }
-    val folderTarget = if (folderId == null && area != null && area != LayoutArea.FAVORITES)
+    val target: AppDropTarget? = if (movingFolderId != null) AppDropTarget.Folder(movingFolderId)
+        else if (folderId != null) AppDropTarget.Folder(folderId, app.key) else area?.takeIf { it != LayoutArea.DOCK }?.let { AppDropTarget.Area(it, app.key) }
+    val folderTarget = if (movingFolderId == null && folderId == null && area != null && area != LayoutArea.FAVORITES && area != LayoutArea.DOCK)
         AppDropTarget.CreateFolder(area, app.key) else null
     return then(if (target != null) Modifier.appDropTarget(target, if (folderId != null) 5 else 2) else Modifier)
         .then(if (folderTarget != null) Modifier.appDropTarget(folderTarget, 3, centerOnly = true) else Modifier)
@@ -129,7 +144,7 @@ internal fun Modifier.appIconGestures(
             detectDragGesturesAfterLongPress(
                 onDragStart = { point ->
                     feedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                    drag.begin(app, area, token, bounds.value.topLeft + point, viewConfiguration.touchSlop, folderId)
+                    drag.begin(app, area, token, bounds.value.topLeft + point, viewConfiguration.touchSlop, folderId, movingFolderId)
                     showMenu()
                 },
                 onDragEnd = { drag.finish(token) },
@@ -143,6 +158,13 @@ internal fun Modifier.appIconGestures(
 internal fun AppDragOverlay(drag: AppDragController, state: LauncherState, repository: AppsRepository) {
     val active = drag.active ?: return
     val halfIcon = with(LocalDensity.current) { 28.dp.roundToPx() }
+    val folder = state.folders.find { it.id == active.movingFolderId }
+    if (folder != null) {
+        Icon(androidx.compose.material.icons.Icons.Rounded.Folder, folder.name, Modifier.offset {
+            IntOffset(drag.position.x.roundToInt() - halfIcon, drag.position.y.roundToInt() - halfIcon)
+        }.size(56.dp))
+        return
+    }
     AppIcon(active.app, repository, state, 56, Modifier.offset {
         IntOffset(drag.position.x.roundToInt() - halfIcon, drag.position.y.roundToInt() - halfIcon)
     }.clearAndSetSemantics {})

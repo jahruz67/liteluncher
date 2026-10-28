@@ -78,15 +78,12 @@ internal fun LazyListScope.dockPreferences(p: LauncherPrefs, update: ((LauncherP
         ToggleSetting("All Apps Button", d.allApps) { v -> update { it.copy(dock = it.dock.copy(allApps = v)) } }
         ToggleSetting("All Apps button on left side", d.allAppsLeft) { v -> update { it.copy(dock = it.dock.copy(allAppsLeft = v)) } }
         ToggleSetting("Open folder as stack", d.folderStack) { v -> update { it.copy(dock = it.dock.copy(folderStack = v)) } }
-        ChoiceSetting("Hide automatically", d.autoHide, listOf(false to "Never", true to "After inactivity")) { v -> update { it.copy(dock = it.dock.copy(autoHide = v)) } }
-        ToggleSetting("Show when scrolling", d.showWhenScrolling) { v -> update { it.copy(dock = it.dock.copy(showWhenScrolling = v, hideOnScroll = false)) } }
         ChoiceSetting("Position", d.side, listOf("Right", "Left").map { it to it }) { v -> update { it.copy(dock = it.dock.copy(side = v)) } }
         ToggleSetting("Use full width", d.fullWidth) { v -> update { it.copy(dock = it.dock.copy(fullWidth = v)) } }
         FloatSetting("Alignment", d.alignment, 0f..1f) { v -> update { it.copy(dock = it.dock.copy(alignment = v)) } }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Top"); Text("Bottom") }
         ToggleSetting("Prevent changes", d.preventChanges) { v -> update { it.copy(dock = it.dock.copy(preventChanges = v)) } }
         FloatSetting("Icon Size", d.iconScale, .5f..1.5f) { v -> update { it.copy(dock = it.dock.copy(iconScale = v)) } }
-        IntSetting("Maximum items", d.maxItems, 1..12) { v -> update { it.copy(dock = it.dock.copy(maxItems = v)) } }
     } }
 }
 

@@ -23,9 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -33,6 +35,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -144,10 +147,10 @@ fun AppContextMenu(
                 }
                 if (app.key !in state.dockApps && !state.prefs.dock.preventChanges) {
                     ActionRowItem("Pin to Dock", Icons.Rounded.Dock, {
-                        val full = state.dockApps.size + state.dockFolders.size >= state.prefs.dock.maxItems
-                        if (full) android.widget.Toast.makeText(context, "Dock is full. Remove an entry or increase its item limit.", android.widget.Toast.LENGTH_SHORT).show()
+                        val full = state.layoutSpace(LayoutArea.DOCK) == 0
+                        if (full) android.widget.Toast.makeText(context, "The dock has reached its item limit.", android.widget.Toast.LENGTH_SHORT).show()
                         else actions.update { current ->
-                            if (current.prefs.dock.preventChanges || current.dockApps.size + current.dockFolders.size >= current.prefs.dock.maxItems) current
+                            if (current.prefs.dock.preventChanges || current.layoutSpace(LayoutArea.DOCK) == 0) current
                             else current.copy(dockApps = (current.dockApps + app.key).distinct())
                         }
                         onDismiss()
@@ -275,7 +278,6 @@ fun EmptySpaceMenuDialog(
 
                 ActionRowItem("Settings", Icons.Rounded.Tune, onSettings)
                 HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
-
                 ActionRowItem("Manage Layout", Icons.Rounded.DashboardCustomize, onManageLayout)
             }
         }
@@ -355,18 +357,30 @@ fun FolderOverlay(
         folder.apps.mapNotNull(byKey::get)
     }
     val stack = fromDock && state.prefs.dock.folderStack
+    val drag = LocalAppDrag.current
+    var bounds by remember(folder.id) { mutableStateOf(Rect.Zero) }
+    var draggingOutside by remember(folder.id) { mutableStateOf(false) }
+    LaunchedEffect(drag?.active, drag?.position) {
+        if (drag != null && drag.active?.folderId == folder.id && bounds != Rect.Zero && !bounds.contains(drag.position)) {
+            draggingOutside = true
+            if (folder.id !in drag.dismissedFolders) drag.dismissedFolders.add(folder.id)
+        }
+        if (draggingOutside && drag?.active == null) onDismiss()
+    }
     val folderColor = parseColor(state.prefs.folders.color)
     val background = folderColor.copy(alpha = folderColor.alpha * state.prefs.folders.opacity)
     val folderContent = if (folderColor.luminance() > .5f) Ink else Mist
 
-    Box(Modifier.fillMaxSize().background(ColorForOverlay).clickable(onClick = onDismiss)) {
+    // Keep the source composed until release so its pointer handler continues the drag.
+    Box(Modifier.fillMaxSize().alpha(if (draggingOutside) 0f else 1f).background(ColorForOverlay).clickable(onClick = onDismiss)) {
         if (stack) {
             val left = state.prefs.dock.side == "Left"
             Column(
                 Modifier.align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
-                    .appDropTarget(AppDropTarget.Folder(folder.id), 4)
                     .padding(start = if (left) 88.dp else 16.dp, end = if (left) 16.dp else 88.dp)
-                    .widthIn(max = 260.dp),
+                    .widthIn(max = 260.dp).heightIn(max = 460.dp)
+                    .onGloballyPositioned { bounds = it.boundsInRoot() }
+                    .appDropTarget(AppDropTarget.Folder(folder.id), 4).verticalScroll(rememberScrollState()),
                 horizontalAlignment = if (left) Alignment.Start else Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -377,7 +391,7 @@ fun FolderOverlay(
                 ) {
                     Text(folder.name, fontSize = 12.sp, color = Mist, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
                 }
-                members.take(8).forEachIndexed { index, app ->
+                members.forEachIndexed { index, app ->
                     val fan = (kotlin.math.sin((index.toFloat() / (members.size - 1).coerceAtLeast(1)) * Math.PI) * 24).toInt()
                     Surface(
                         color = background,
@@ -400,12 +414,11 @@ fun FolderOverlay(
                         }
                     }
                 }
-                if (members.size > 8) TextButton(onClick = { onDismiss(); actions.manageLayout() }) { Text("Manage all ${members.size} apps") }
-                if (members.isEmpty()) TextButton(onClick = { onDismiss(); actions.manageLayout() }) { Text("Add applications") }
             }
         } else {
             Surface(
-                Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp).appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
+                Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp)
+                    .onGloballyPositioned { bounds = it.boundsInRoot() }.appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
                 color = background,
                 contentColor = folderContent,
                 shape = RoundedCornerShape(28.dp),
@@ -414,11 +427,10 @@ fun FolderOverlay(
                 Column(Modifier.padding(22.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(folder.name, modifier = Modifier.weight(1f), fontSize = 22.sp, color = folderContent)
-                        IconButton(onClick = { onDismiss(); actions.manageLayout() }) {
+                        IconButton(onClick = { onDismiss(); actions.editFolder(folder) }, enabled = !state.folderLocked(folder.id)) {
                             Icon(Icons.Rounded.Edit, "Edit folder", tint = Muted, modifier = Modifier.size(18.dp))
                         }
                     }
-                    if (members.isEmpty()) Text("Add applications in Manage layout.", color = Muted, fontSize = 13.sp)
                     LazyColumn(Modifier.heightIn(max = 410.dp)) {
                         items(members.chunked(3)) { row ->
                             Row(Modifier.fillMaxWidth()) {
@@ -436,4 +448,53 @@ fun FolderOverlay(
     }
 }
 
+@Composable
+internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean, onEdit: () -> Unit, onDismiss: () -> Unit) {
+    AnchoredIconMenu(anchor, onDismiss) {
+        Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF282828), modifier = Modifier.width(224.dp)) {
+            Column(Modifier.padding(12.dp)) {
+                Text(folder.name, color = Color.White)
+                if (!locked) ActionRowItem("Edit folder", Icons.Rounded.Edit, onEdit)
+            }
+        }
+    }
+}
+
 private val ColorForOverlay = Color.Black.copy(alpha = .5f)
+
+
+@Composable
+internal fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (FolderItem) -> Unit, onDismiss: () -> Unit) {
+    var name by remember(folder.id) { mutableStateOf(folder.name) }
+    var selected by remember(folder.id) { mutableStateOf(folder.apps) }
+    var filter by rememberSaveable(folder.id) { mutableStateOf("") }
+    val appKeys = remember(apps) { apps.mapTo(hashSetOf()) { it.key } }
+    val selectedKeys = remember(selected) { selected.toHashSet() }
+    val unavailable = remember(selected, appKeys) { selected.filter { it !in appKeys } }
+    val matching = remember(apps, filter) { apps.filter { it.label.contains(filter, true) } }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit folder") }, text = {
+        Column {
+            OutlinedTextField(name, { name = it.take(128) }, label = { Text("Folder name") }, singleLine = true)
+            OutlinedTextField(filter, { filter = it.take(80) }, label = { Text("Filter applications") }, singleLine = true, modifier = Modifier.padding(top = 10.dp))
+            Text("${selected.size} selected", fontSize = 12.sp, color = Muted, modifier = Modifier.padding(vertical = 10.dp))
+            LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                items(unavailable, key = { "unavailable:$it" }) { key ->
+                    Row(Modifier.fillMaxWidth().clickable { selected = selected - key }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(true, { selected = selected - key })
+                        Text("Unavailable app", fontSize = 13.sp)
+                    }
+                }
+                items(matching, key = { it.key }) { app ->
+                    val checked = app.key in selectedKeys
+                    val enabled = checked || selected.size < MAX_LAYOUT_APPS
+                    val toggle = { selected = if (checked) selected - app.key else selected + app.key }
+                    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = toggle), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked, { toggle() }, enabled = enabled)
+                        Text(app.label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { onSave(folder.copy(name = name.trim(), apps = selected.distinct())) }, enabled = name.isNotBlank()) { Text("Save folder") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}

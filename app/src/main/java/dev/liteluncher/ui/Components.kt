@@ -117,8 +117,12 @@ fun AppTile(
 @Composable
 fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
     onClick: () -> Unit, onLongClick: () -> Unit = {}, modifier: Modifier = Modifier) {
+    val representative = apps.firstOrNull { it.key in folder.apps }
+    val area = if (folder.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
     Column(modifier.clip(RoundedCornerShape(16.dp)).appDropTarget(AppDropTarget.Folder(folder.id), 3)
-        .combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(vertical = 8.dp),
+        .then(if (representative != null) Modifier.appIconGestures(representative, area,
+            !state.folderLocked(folder.id), onClick, onLongClick, movingFolderId = folder.id)
+        else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)).padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (56 * prefs.iconScale).dp
         val folderColor = parseColor(state.prefs.folders.color)

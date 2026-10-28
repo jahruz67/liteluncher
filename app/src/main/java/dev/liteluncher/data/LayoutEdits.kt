@@ -30,7 +30,7 @@ internal fun LauncherState.layoutLocked(area: LayoutArea): Boolean = when (area)
 
 internal fun LauncherState.layoutSpace(area: LayoutArea): Int = when (area) {
     LayoutArea.HOME -> prefs.home.rows * prefs.home.columns - homeApps.size - homeFolders.size - shortcuts.size
-    LayoutArea.DOCK -> prefs.dock.maxItems - dockApps.size - dockFolders.size
+    LayoutArea.DOCK -> MAX_LAYOUT_APPS - dockApps.size - dockFolders.size
     LayoutArea.FAVORITES -> prefs.favorites.maxItems - favoriteApps.size
 }.coerceAtLeast(0)
 
@@ -88,10 +88,43 @@ internal fun applyAppDrop(state: LauncherState, key: String, source: LayoutArea?
     }
     val staysInFolder = target is AppDropTarget.Folder && target.id == sourceFolder ||
         target is AppDropTarget.Area && target.area == LayoutArea.FAVORITES
-    if (result.error != null || sourceFolder == null || staysInFolder) return result
+    if (result.error != null) return result
+    if (sourceFolder == null || staysInFolder) return result.copy(state = result.state.collapseSmallFolders())
     return result.copy(state = result.state.copy(folders = result.state.folders.map {
         if (it.id == sourceFolder) it.copy(apps = it.apps - key) else it
-    }))
+    }).collapseSmallFolders())
+}
+
+// Normalize both restored layouts and edits so a folder always contains at least two apps.
+internal fun LauncherState.collapseSmallFolders(): LauncherState {
+    val small = folders.filter { it.apps.size < 2 }
+    if (small.isEmpty()) return this
+    val ids = small.map { it.id }.toSet()
+    return copy(
+        homeApps = (homeApps + small.filter { it.id in homeFolders }.flatMap { it.apps }).distinct(),
+        dockApps = (dockApps + small.filter { it.id in dockFolders }.flatMap { it.apps }).distinct(),
+        homeFolders = homeFolders - ids, dockFolders = dockFolders - ids,
+        folders = folders.filterNot { it.id in ids }
+    )
+}
+
+internal fun applyFolderDrop(state: LauncherState, id: String, source: LayoutArea?, target: AppDropTarget): LayoutEditResult {
+    if (state.folders.none { it.id == id }) return LayoutEditResult(state, "This folder no longer exists")
+    if (state.folderLocked(id)) return LayoutEditResult(state, "This folder is locked")
+    val area = when (target) {
+        is AppDropTarget.Area -> target.area
+        is AppDropTarget.Folder -> if (target.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
+        else -> return LayoutEditResult(state)
+    }
+    if (area == LayoutArea.FAVORITES || state.layoutLocked(area)) return LayoutEditResult(state)
+    if (source != area && state.layoutSpace(area) == 0) return LayoutEditResult(state, "${area.title} is full")
+    val list = (if (area == LayoutArea.HOME) state.homeFolders else state.dockFolders) - id
+    val at = (target as? AppDropTarget.Folder)?.id?.let { list.indexOf(it) } ?: -1
+    val ordered = list.toMutableList().apply { add(if (at >= 0) at else size, id) }
+    return LayoutEditResult(state.copy(
+        homeFolders = if (area == LayoutArea.HOME) ordered else state.homeFolders - id,
+        dockFolders = if (area == LayoutArea.DOCK) ordered else state.dockFolders - id
+    ))
 }
 
 private fun createLayoutFolder(state: LauncherState, key: String, source: LayoutArea?, target: AppDropTarget.CreateFolder): LayoutEditResult {

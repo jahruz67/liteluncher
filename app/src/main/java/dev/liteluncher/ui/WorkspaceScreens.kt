@@ -104,7 +104,7 @@ fun HomeScreen(
 
         if (selected.isEmpty() && folders.isEmpty() && state.shortcuts.isEmpty()) {
             Box(Modifier.weight(1f)) {
-                EmptyCard(Icons.Rounded.Home, "A home of your own", "Choose your everyday apps and arrange them just how you like.", "Add apps", actions.manageLayout)
+                EmptyCard(Icons.Rounded.Home, "A home of your own", "Hold an app in the app drawer to add it to Home.", "Add apps", { actions.navigate(Screen.APPS) })
             }
         } else {
             val slotCount = prefs.rows * prefs.columns
@@ -114,27 +114,32 @@ fun HomeScreen(
                 start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
                 end = if (state.prefs.dock.side == "Right") dockInset else 0.dp
             )) {
-            val rowHeight = (maxHeight / prefs.rows).coerceAtLeast((56 * prefs.iconScale + if (prefs.labels) 40 else 16).dp)
+            val visibleRows = if (prefs.listMode) filledSlots.coerceIn(1, slotCount) else prefs.rows
+            val spacing = if (prefs.listMode) (prefs.spacing / 2).dp else 0.dp
+            val rowHeight = ((maxHeight - spacing * (visibleRows - 1)) / visibleRows).coerceAtLeast(0.dp)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
                 modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = false,
                 horizontalArrangement = Arrangement.spacedBy((prefs.spacing / 4).dp),
-                verticalArrangement = Arrangement.spacedBy(if (prefs.listMode) (prefs.spacing / 2).dp else 0.dp)
+                verticalArrangement = Arrangement.spacedBy(spacing)
             ) {
                 items(selected.take(slotCount), key = { it.key }) { app ->
-                    if (prefs.listMode) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs, !prefs.preventChanges, LayoutArea.HOME)
+                    if (prefs.listMode) Box(Modifier.height(rowHeight)) {
+                        AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs, !prefs.preventChanges, LayoutArea.HOME)
+                    }
                     else AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.fillMaxWidth().height(rowHeight),
                         draggable = !prefs.preventChanges, dragArea = LayoutArea.HOME)
                 }
                 items(folders.take((slotCount - selected.size).coerceAtLeast(0)), key = { "folder:${it.id}" }) { folder ->
-                    FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, actions.manageLayout, Modifier.fillMaxWidth().height(if (prefs.listMode) 88.dp else rowHeight))
+                    FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, { actions.folderActions(folder) }, Modifier.fillMaxWidth().height(rowHeight))
                 }
                 items(state.shortcuts.take((slotCount - selected.size - folders.size).coerceAtLeast(0)), key = { "shortcut:${it.packageName}:${it.id}:${it.userSerial}" }) { shortcut ->
                     val app = remember(apps, shortcut.packageName, shortcut.userSerial) {
                         apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
                     }
                     Column(
-                        Modifier.height(if (prefs.listMode) 88.dp else rowHeight).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
+                        Modifier.height(rowHeight).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
                             val user = app?.user ?: context.getSystemService(android.os.UserManager::class.java)
                                 ?.getUserForSerialNumber(shortcut.userSerial)
                             if (user != null) repository.launchShortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
@@ -497,7 +502,7 @@ fun FavoritesScreen(
                 Spacer(Modifier.height(8.dp))
             }
         }
-        item { SectionLabel(if (prefs.byUsage) "Most used & pinned" else "Alphabetical favorites", "Arrange", actions.manageLayout) }
+        item { SectionLabel(if (prefs.byUsage) "Most used & pinned" else "Alphabetical favorites") }
         if (favorites.isEmpty()) item { EmptyCard(Icons.Rounded.StarOutline, "Your favorites find you", "Open apps to see your most used here, or long-press any app to pin it.", "Browse applications", { actions.navigate(Screen.APPS) }) }
         else items(favorites.chunked(columns)) { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
