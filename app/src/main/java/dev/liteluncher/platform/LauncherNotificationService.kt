@@ -40,6 +40,7 @@ class LauncherNotificationService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        connected = this
         rebuild()
     }
 
@@ -113,11 +114,13 @@ class LauncherNotificationService : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        if (connected === this) connected = null
         clearCounts()
         super.onListenerDisconnected()
     }
 
     override fun onDestroy() {
+        if (connected === this) connected = null
         if (receiverRegistered) runCatching { unregisterReceiver(profileReceiver) }
         clearCounts()
         super.onDestroy()
@@ -128,6 +131,12 @@ class LauncherNotificationService : NotificationListenerService() {
     }
 
     companion object {
+        private var connected: LauncherNotificationService? = null
+        fun refresh(context: Context) {
+            val service = connected
+            if (service != null) service.rebuild()
+            else NotificationListenerService.requestRebind(android.content.ComponentName(context, LauncherNotificationService::class.java))
+        }
         private val mutableCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
         val counts: StateFlow<Map<String, Int>> = mutableCounts.asStateFlow()
         fun badgeKey(packageName: String, userSerial: Long): String = "$packageName|$userSerial"

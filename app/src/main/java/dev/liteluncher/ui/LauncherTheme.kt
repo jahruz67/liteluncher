@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import dev.liteluncher.data.AppearancePrefs
 import dev.liteluncher.data.SurfaceTheme
 import dev.liteluncher.data.ThemeMode
@@ -29,9 +30,9 @@ fun LauncherTheme(prefs: AppearancePrefs, content: @Composable () -> Unit) {
     }
     val accent = parseColor(prefs.accent)
     MaterialTheme(
-        colorScheme = if (dark) darkColorScheme(primary = accent, onPrimary = Ink, background = Ink, surface = Panel,
+        colorScheme = if (dark) darkColorScheme(primary = accent, onPrimary = contrastContent(accent), background = Ink, surface = Panel,
             onBackground = Mist, onSurface = Mist, surfaceVariant = Color(0xFF484848), onSurfaceVariant = Muted)
-        else lightColorScheme(primary = accent, onPrimary = Color.White, background = Color(0xFFF2F2F2),
+        else lightColorScheme(primary = accent, onPrimary = contrastContent(accent), background = Color(0xFFF2F2F2),
             surface = Color(0xFFFAFAFA), onSurface = Ink, surfaceVariant = Color(0xFFE0E0E0)),
         content = content
     )
@@ -44,4 +45,11 @@ fun surfaceColor(theme: SurfaceTheme, accent: Color): Color = when (theme) {
     SurfaceTheme.ACCENT -> accent.copy(alpha = .92f)
 }
 
-fun surfaceContent(theme: SurfaceTheme): Color = if (theme == SurfaceTheme.LIGHT || theme == SurfaceTheme.ACCENT) Ink else Mist
+fun contrastContent(color: Color): Color = if (color.luminance() > .179f) Color.Black else Color.White
+
+@Composable
+fun surfaceContent(theme: SurfaceTheme): Color = when (theme) {
+    SurfaceTheme.LIGHT -> Ink
+    SurfaceTheme.ACCENT -> contrastContent(MaterialTheme.colorScheme.primary)
+    else -> Mist
+}

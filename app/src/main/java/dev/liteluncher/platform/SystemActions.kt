@@ -14,6 +14,11 @@ import android.provider.Settings
 import android.widget.Toast
 
 object SystemActions {
+    fun notifications(context: Context) {
+        val service = context.getSystemService("statusbar")
+        if (service == null || runCatching { service.javaClass.getMethod("expandNotificationsPanel").invoke(service) }.isFailure)
+            error(context, "Android does not allow this launcher to expand notifications. Swipe down from the status bar.")
+    }
     fun defaultHome(activity: Activity) {
         if (!tryOpen(activity, Intent(Settings.ACTION_HOME_SETTINGS))) {
             fallbackSettings(activity, "Default home settings are unavailable.")

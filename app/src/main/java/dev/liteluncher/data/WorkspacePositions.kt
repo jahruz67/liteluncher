@@ -1,5 +1,12 @@
 package dev.liteluncher.data
 
+internal fun LauncherState.desktopObstacles(exceptRestoreKey: String = ""): List<WidgetItem> =
+    (0 until prefs.desktop.pageCount).flatMap { page ->
+        workspacePositions("desktop:$page", prefs.desktop.columns, prefs.desktop.rows).mapIndexed { index, p ->
+            WidgetItem(-1 - page * MAX_LAYOUT_APPS - index, p.column, p.row, p.columns, p.rows, page)
+        }
+    } + pendingWidgets.filter { it.key != exceptRestoreKey }.mapIndexed { index, p -> p.location().copy(id = -100_000 - index) }
+
 internal fun LauncherState.workspaceKeys(container: String): List<String> {
     val entries = when {
         container == "home" -> homeApps + homeFolders.map { "folder:$it" }
@@ -39,11 +46,11 @@ internal fun LauncherState.workspacePositions(container: String, columns: Int, r
 }
 
 internal fun LauncherState.sanitizePositions(): LauncherState {
-    val containers = setOf("home", "dock") + (0 until prefs.desktop.pageCount).map { "desktop:$it" } + folders.map { "folder:${it.id}" }
+    val containers = setOf("home", "dock") + (0 until 16).map { "desktop:$it" } + folders.map { "folder:${it.id}" }
     val candidates = containers.associateWith { workspaceKeys(it).toSet() }
     val positions = this.positions.asSequence().filter { position ->
-        val columns = if (position.container == "home") prefs.home.columns else if (position.container == "dock") 1 else prefs.desktop.columns
-        val rows = if (position.container == "home") prefs.home.rows else if (position.container == "dock") MAX_LAYOUT_APPS else prefs.desktop.rows
+        val columns = if (position.container == "dock") 1 else 16
+        val rows = if (position.container == "dock") MAX_LAYOUT_APPS else 32
         position.key in candidates[position.container].orEmpty() && position.column >= 0 && position.row >= 0 &&
             position.columns in 1..columns && position.rows in 1..rows &&
             position.column <= columns - position.columns && position.row <= rows - position.rows
@@ -51,9 +58,9 @@ internal fun LauncherState.sanitizePositions(): LauncherState {
     val widgets = pendingWidgets.asSequence().filter { widget ->
         widget.key.isNotBlank() && widget.key.length <= 512 && widget.provider.length <= 512 &&
             android.content.ComponentName.unflattenFromString(widget.provider) != null &&
-            widget.page in 0 until prefs.desktop.pageCount && widget.column >= 0 && widget.row >= 0 &&
-            widget.columns in 1..prefs.desktop.columns && widget.rows in 1..prefs.desktop.rows &&
-            widget.column <= prefs.desktop.columns - widget.columns && widget.row <= prefs.desktop.rows - widget.rows
+            widget.page in 0..15 && widget.column >= 0 && widget.row >= 0 &&
+            widget.columns in 1..16 && widget.rows in 1..32 &&
+            widget.column <= 16 - widget.columns && widget.row <= 32 - widget.rows
     }.distinctBy { it.key }.take(64).toList()
     return copy(positions = positions, pendingWidgets = widgets,
         shortcuts = shortcuts.map { if (it.container in containers || it.container == "library") it else it.copy(container = "home") },

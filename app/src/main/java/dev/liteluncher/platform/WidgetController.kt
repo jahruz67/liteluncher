@@ -64,6 +64,8 @@ class WidgetController(
     private var cellWidthDp = 80f
     private var cellHeightDp = 80f
     private var layoutItems = emptyList<WidgetItem>()
+    private var obstacles = emptyList<WidgetItem>()
+    private var locked = false
     private var cachedPlacementLayout: PlacementLayout? = null
     private var currentPage = 0
     private val mutableRefreshes = MutableStateFlow<Map<Int, Int>>(emptyMap())
@@ -165,7 +167,7 @@ class WidgetController(
 
     private fun beginAdd(provider: AppWidgetProviderInfo, pin: LauncherApps.PinItemRequest?, location: WidgetItem? = null) {
         restorePending()
-        if (closed) return
+        if (closed || locked) return
         if (pending != null || pinDialog != null) {
             SystemActions.error(activity, "Finish adding the current widget first.")
             return
@@ -305,12 +307,12 @@ class WidgetController(
         }?.layout ?: WidgetGrid.arrange(layoutItems.filter { it.page == page }, columns, rows).also {
             cachedPlacementLayout = PlacementLayout(layoutItems, columns, rows, page, it)
         }
-        if (occupied.overflow.isNotEmpty()) return null
+        val occupiedItems = occupied.placed + obstacles.filter { it.page == page && it.restoreKey != location?.restoreKey }
         val maximum = maximumSpan(info)
         if (!location?.restoreKey.isNullOrEmpty()) {
             if (location!!.columns !in minimum.first..maximum.first || location.rows !in minimum.second..maximum.second) return null
             val exact = location.copy(id = id, provider = info.provider.flattenToString())
-            return exact.takeIf { WidgetGrid.fits(it, occupied.placed, columns, rows) }
+            return exact.takeIf { WidgetGrid.fits(it, occupiedItems, columns, rows) }
         }
         val maxColumns = desiredColumns.coerceIn(minimum.first, maximum.first)
         val maxRows = desiredRows.coerceIn(minimum.second, maximum.second)
@@ -318,7 +320,7 @@ class WidgetController(
             for (columnSpan in maxColumns downTo minimum.first) {
                 val candidate = WidgetGrid.place(WidgetItem(id, column = location?.column ?: 0, row = location?.row ?: 0,
                     columns = columnSpan, rows = rowSpan, page = page, provider = info.provider.flattenToString()),
-                    occupied.placed, columns, rows)
+                    occupiedItems, columns, rows)
                 if (candidate != null) return candidate
             }
         }
@@ -356,7 +358,9 @@ class WidgetController(
     }
 
     /** The workspace owns the complete layout snapshot and selected page. */
-    fun updateLayout(prefs: DesktopPrefs, widgets: List<WidgetItem>, page: Int = currentPage) {
+    fun updateLayout(prefs: DesktopPrefs, widgets: List<WidgetItem>, page: Int = currentPage, blocked: List<WidgetItem> = emptyList()) {
+        locked = prefs.preventChanges
+        obstacles = blocked
         columns = prefs.columns.coerceIn(1, 24)
         rows = prefs.rows.coerceIn(1, 32)
         layoutItems = widgets.distinctBy { it.id }
@@ -383,14 +387,20 @@ class WidgetController(
     }
 
     internal fun refresh(id: Int) {
-        val info = provider(id) ?: return
+        val info = provider(id)
         // Recreate the host view to reload Android's most recent RemoteViews, and ask the
         // provider to refresh its data. Providers may apply their own refresh throttling.
         mutableRefreshes.value = mutableRefreshes.value + (id to ((mutableRefreshes.value[id] ?: 0) + 1))
+        if (info == null) return
+        val exported = runCatching { activity.packageManager.getReceiverInfo(info.provider, 0).exported }.getOrDefault(false)
+        if (!exported) {
+            SystemActions.error(activity, "Widget view reloaded. Its app controls when fresh data is available.")
+            return
+        }
         runCatching {
             activity.sendBroadcast(Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE)
                 .setComponent(info.provider).putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, intArrayOf(id)))
-        }
+        }.onFailure { SystemActions.error(activity, "Widget view reloaded, but its app refused the refresh request.") }
     }
 
     fun deferRemoval(id: Int) {
@@ -432,8 +442,10 @@ class WidgetController(
     }
 
     fun remove(id: Int) {
+        deferRemoval(id)
+        if (runCatching { host.deleteAppWidgetId(id) }.isFailure) return
+        if (pending?.id == id) { pending = null; journal.edit().remove("id").apply() }
         cancelRemoval(id)
-        if (pending?.id == id) cancelPending() else runCatching { host.deleteAppWidgetId(id) }
         layoutItems = layoutItems.filterNot { it.id == id }
         mutableRefreshes.value = mutableRefreshes.value - id
     }
@@ -470,8 +482,10 @@ class WidgetController(
             intent.action == LauncherApps.ACTION_CONFIRM_PIN_APPWIDGET
         // The activity still holds its original pin intent while Android is binding or
         // configuring that widget. Replaying it must not create another confirmation.
-        if (pending != null) return pinIntent
-        if (pinDialog != null) return pinIntent || pinConfirmation != null
+        if (pending != null || pinDialog != null) {
+            if (pinIntent) SystemActions.error(activity, "Finish the current pin request, then request this item again.")
+            return pinIntent
+        }
         val request = pinConfirmation ?: if (pinIntent) {
             runCatching { launcher.getPinItemRequest(intent) }.getOrNull()
         } else null

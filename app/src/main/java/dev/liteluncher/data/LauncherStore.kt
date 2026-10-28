@@ -89,7 +89,7 @@ class LauncherStore(context: Context) {
                                         runCatching { android.appwidget.AppWidgetManager.getInstance(applicationContext)
                                             .getAppWidgetInfo(item.id)?.provider?.flattenToString() }.getOrNull().orEmpty()
                                     }
-                                    if (provider.isBlank()) null else PortableWidget("widget:${item.id}", provider,
+                                    if (provider.isBlank()) null else PortableWidget("local-widget:${item.id}:${java.util.UUID.randomUUID()}", provider,
                                         item.column, item.row, item.columns, item.rows, item.page)
                                 }
                                 command.result.complete(encode(current.copy(widgets = emptyList(),
@@ -251,6 +251,8 @@ class LauncherStore(context: Context) {
             decode(raw, portable = false)
         } catch (failure: Exception) {
             Log.w(TAG, "Recovering an invalid launcher snapshot", failure)
+            val recovery = java.io.File(applicationContext.filesDir, "launcher-snapshot-recovery.json")
+            if (!recovery.exists()) recovery.writeText(raw)
             LauncherState()
         }
     }
@@ -327,7 +329,11 @@ class LauncherStore(context: Context) {
         }
 
         fun sanitize(value: LauncherState): LauncherState {
-            val prefs = sanitizePrefs(value.prefs)
+            val requested = sanitizePrefs(value.prefs)
+            // Keep populated pages reachable instead of clamping or deleting their contents.
+            val lastPage = (value.desktopApps.filterValues { it.isNotEmpty() }.keys +
+                value.widgets.map { it.page } + value.pendingWidgets.map { it.page }).filter { it in 0..15 }.maxOrNull() ?: 0
+            val prefs = requested.copy(desktop = requested.desktop.copy(pageCount = maxOf(requested.desktop.pageCount, lastPage + 1)))
             val folders = value.folders.asSequence().mapNotNull { folder ->
                 val id = key(folder.id) ?: return@mapNotNull null
                 folder.copy(id = id, name = text(folder.name, 128), apps = keys(folder.apps, MAX_APPS), iconUri = safeUri(folder.iconUri),
@@ -350,7 +356,7 @@ class LauncherStore(context: Context) {
                 .take(MAX_WIDGETS).map { widget ->
                     val column = widget.column.coerceIn(0, MAX_COLUMNS - 1)
                     val row = widget.row.coerceIn(0, MAX_ROWS - 1)
-                    widget.copy(column = column, row = row, page = widget.page.coerceIn(0, prefs.desktop.pageCount - 1),
+                    widget.copy(column = column, row = row, page = widget.page.coerceIn(0, 15),
                         columns = widget.columns.coerceIn(1, MAX_COLUMNS - column),
                         rows = widget.rows.coerceIn(1, MAX_ROWS - row),
                         provider = text(widget.provider, 512), restoreKey = text(widget.restoreKey, 512))
@@ -362,7 +368,7 @@ class LauncherStore(context: Context) {
                 shortcut.copy(id = id, packageName = packageName, label = text(shortcut.label, 128),
                     userSerial = shortcut.userSerial.coerceAtLeast(0), container = text(shortcut.container, 512),
                     backupIcon = backupIcon(shortcut.backupIcon))
-            }.distinctBy { Triple(it.packageName, it.id, it.userSerial) }.take(MAX_SHORTCUTS).toList()
+            }.distinctBy { it.layoutKey to it.container }.take(MAX_SHORTCUTS).toList()
             return value.copy(
                 schemaVersion = SCHEMA_VERSION, prefs = prefs,
                 homeApps = keys(value.homeApps, MAX_APPS), dockApps = keys(value.dockApps, MAX_APPS),
@@ -371,7 +377,7 @@ class LauncherStore(context: Context) {
                 homeFolders = keys(value.homeFolders, MAX_FOLDERS).filter { it in folderIds },
                 dockFolders = keys(value.dockFolders, MAX_FOLDERS).filter { it in folderIds },
                 widgets = widgets,
-                desktopApps = value.desktopApps.filterKeys { it in 0 until prefs.desktop.pageCount }
+                desktopApps = value.desktopApps.filterKeys { it in 0..15 }
                     .mapValues { keys(it.value, MAX_APPS) },
                 contacts = value.contacts.asSequence().map { safeUri(it, contact = true) }
                     .filter { it.isNotEmpty() }.distinct().take(MAX_CONTACTS).toList(),
@@ -439,7 +445,7 @@ class LauncherStore(context: Context) {
             columns = value.columns.coerceIn(1, MAX_COLUMNS), rows = value.rows.coerceIn(1, MAX_ROWS),
             iconScale = bounded(value.iconScale, .25f, 3f, 1f), padding = value.padding.coerceIn(0, 256),
             spacing = value.spacing.coerceIn(0, 256), textScale = bounded(value.textScale, .25f, 3f, 1f),
-            intermediateSteps = value.intermediateSteps.coerceIn(0, 4), borderPadding = value.borderPadding.takeIf { it in setOf("Default", "None", "Small", "Large") } ?: "Default"
+            intermediateSteps = 0, borderPadding = value.borderPadding.takeIf { it in setOf("Default", "None", "Small", "Large") } ?: "Default"
         )
 
         fun bounded(value: Float, min: Float, max: Float, fallback: Float): Float =

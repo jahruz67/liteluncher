@@ -9,6 +9,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val store = LauncherStore(application)
     val apps = AppsRepository(application)
 
+    init { apps.onShortcutLaunched = store::recordLaunch }
+
     override fun onCleared() {
         apps.close()
         store.close()

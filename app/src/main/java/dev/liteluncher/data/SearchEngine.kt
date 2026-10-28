@@ -30,11 +30,7 @@ object SearchEngine {
         if (source.isEmpty()) return null
         return try {
             val result = Parser(source).parse()
-            if (result == 0.0) "0" else {
-                val decimal = BigDecimal.valueOf(result).round(MathContext(12)).stripTrailingZeros()
-                if (abs(result) >= 1e-9 && abs(result) < 1e12) decimal.toPlainString()
-                else decimal.toString()
-            }
+            result.stripTrailingZeros().let { if (it.signum() == 0) "0" else if (it.scale() in -20..40) it.toPlainString() else it.toString() }
         } catch (_: IllegalArgumentException) {
             null
         } catch (_: ArithmeticException) {
@@ -130,14 +126,14 @@ object SearchEngine {
         private var depth = 0
         private var operations = 0
 
-        fun parse(): Double {
+        fun parse(): BigDecimal {
             val result = sum()
             whitespace()
             require(position == source.length)
             return finite(result)
         }
 
-        private fun sum(): Double {
+        private fun sum(): BigDecimal {
             var result = product()
             while (true) {
                 result = when {
@@ -149,19 +145,19 @@ object SearchEngine {
             }
         }
 
-        private fun product(): Double {
+        private fun product(): BigDecimal {
             var result = unary()
             while (true) {
                 result = when {
                     consume('*') -> finite(result * unary())
                     consume('/') -> {
                         val divisor = unary()
-                        require(divisor != 0.0)
-                        finite(result / divisor)
+                        require(divisor.signum() != 0)
+                        finite(result.divide(divisor, MathContext.DECIMAL128))
                     }
                     consume('%') -> {
                         val divisor = unary()
-                        require(divisor != 0.0)
+                        require(divisor.signum() != 0)
                         finite(result % divisor)
                     }
                     else -> return result
@@ -171,7 +167,7 @@ object SearchEngine {
         }
 
         // Unary minus binds less tightly than exponentiation; powers associate to the right.
-        private fun unary(): Double = nested {
+        private fun unary(): BigDecimal = nested {
             when {
                 consume('+') -> { operation(); unary() }
                 consume('-') -> { operation(); finite(-unary()) }
@@ -179,15 +175,20 @@ object SearchEngine {
             }
         }
 
-        private fun power(): Double {
+        private fun power(): BigDecimal {
             val base = primary()
             return if (consume('^')) {
                 operation()
-                finite(base.pow(unary()))
+                val exponent = unary()
+                val integer = runCatching { exponent.intValueExact() }.getOrNull()
+                if (integer != null && integer in -1024..1024) {
+                    if (integer >= 0) finite(base.pow(integer))
+                    else finite(BigDecimal.ONE.divide(base.pow(-integer), MathContext.DECIMAL128))
+                } else approximate(base.toDouble().pow(exponent.toDouble()))
             } else base
         }
 
-        private fun primary(): Double {
+        private fun primary(): BigDecimal {
             whitespace()
             if (consume('(')) {
                 val value = sum()
@@ -199,14 +200,16 @@ object SearchEngine {
                 val start = position
                 while (position < source.length && source[position].isLetter()) position++
                 return when (val name = source.substring(start, position).lowercase(Locale.ROOT)) {
-                    "pi", "\u03C0" -> Math.PI
-                    "e" -> Math.E
+                    "pi", "\u03C0" -> BigDecimal.valueOf(Math.PI)
+                    "e" -> BigDecimal.valueOf(Math.E)
                     "sqrt", "abs", "sin", "cos", "tan", "log", "ln" -> {
                         require(consume('('))
-                        val argument = sum()
+                        val decimalArgument = sum()
+                        val argument = decimalArgument.toDouble()
                         require(consume(')'))
                         operation()
-                        finite(when (name) {
+                        if (name == "abs") return decimalArgument.abs()
+                        approximate(when (name) {
                             "sqrt" -> sqrt(argument)
                             "abs" -> abs(argument)
                             "sin" -> sin(argument)
@@ -226,7 +229,7 @@ object SearchEngine {
             return number()
         }
 
-        private fun number(): Double {
+        private fun number(): BigDecimal {
             val start = position
             var digits = 0
             while (position < source.length && source[position] in '0'..'9') { position++; digits++ }
@@ -242,7 +245,7 @@ object SearchEngine {
                 while (position < source.length && source[position] in '0'..'9') position++
                 require(position > exponentStart)
             }
-            return finite(source.substring(start, position).toDouble())
+            return finite(source.substring(start, position).toBigDecimal())
         }
 
         private fun whitespace() {
@@ -257,8 +260,12 @@ object SearchEngine {
         }
 
         private fun operation() { require(++operations <= MAX_OPERATIONS) }
-        private fun finite(value: Double): Double { require(value.isFinite()); return value }
-        private inline fun nested(block: () -> Double): Double {
+        private fun finite(value: BigDecimal): BigDecimal {
+            require(value.precision() <= 4096 && value.scale() in -4096..4096)
+            return value
+        }
+        private fun approximate(value: Double): BigDecimal { require(value.isFinite()); return finite(BigDecimal.valueOf(value)) }
+        private inline fun nested(block: () -> BigDecimal): BigDecimal {
             require(++depth <= MAX_DEPTH)
             return try { block() } finally { depth-- }
         }

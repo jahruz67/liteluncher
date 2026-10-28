@@ -36,6 +36,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.graphics.drawable.toBitmap
 import dev.liteluncher.data.DesktopPrefs
 import dev.liteluncher.data.SurfaceTheme
@@ -55,7 +56,8 @@ fun WidgetPicker(
     onSelect: (AppWidgetProviderInfo, WidgetItem?) -> Unit, onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val providers by produceState<List<WidgetGroup>?>(null, controller, context) {
+    val revision by controller.providerChanges.collectAsStateWithLifecycle()
+    val providers by produceState<List<WidgetGroup>?>(null, controller, context, revision) {
         value = withContext(Dispatchers.IO) {
             controller.providers().groupBy { it.provider.packageName }.map { (key, widgets) ->
                 val label = runCatching {
@@ -69,6 +71,7 @@ fun WidgetPicker(
     }
     var query by rememberSaveable { mutableStateOf("") }
     var expanded by rememberSaveable { mutableStateOf<String?>(null) }
+    var collapsed by rememberSaveable(query) { mutableStateOf(emptyList<String>()) }
     val groups = remember(providers, query) {
         providers.orEmpty().filter { (_, label, widgets) ->
             label.contains(query, true) || widgets.any { it.label.contains(query, true) }
@@ -113,9 +116,12 @@ fun WidgetPicker(
             } else if (groups.isEmpty()) Text("No widgets found", color = Color.White, modifier = Modifier.padding(20.dp))
             else LazyColumn(Modifier.weight(1f)) {
                 groups.forEach { (key, label, widgets) ->
-                    val open = expanded == key || query.isNotBlank()
+                    val open = if (query.isNotBlank()) key !in collapsed else expanded == key
                     item(key = "group:$key", contentType = "header") {
-                        Row(Modifier.fillMaxWidth().clickable { expanded = if (open) null else key }.padding(vertical = 12.dp),
+                        Row(Modifier.fillMaxWidth().clickable {
+                            if (query.isNotBlank()) collapsed = if (open) collapsed + key else collapsed - key
+                            else expanded = if (open) null else key
+                        }.padding(vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             WidgetPreview(widgets.first().provider, true, Modifier.size(36.dp))
                             Column(Modifier.weight(1f).padding(start = 12.dp)) {

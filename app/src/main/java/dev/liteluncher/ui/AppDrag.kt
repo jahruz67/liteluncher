@@ -32,7 +32,7 @@ import dev.liteluncher.platform.AppEntry
 import dev.liteluncher.platform.AppsRepository
 import kotlin.math.roundToInt
 
-internal data class DraggedApp(val app: AppEntry, val source: LayoutArea?, val token: Any, val folderId: String?, val movingFolderId: String? = null)
+internal data class DraggedApp(val app: AppEntry, val source: LayoutArea?, val token: Any, val folderId: String?, val movingFolderId: String? = null, val desktopPage: Int? = null)
 internal data class AppDropRegion(val bounds: Rect, val target: AppDropTarget, val priority: Int)
 
 internal class AppDragController(private val onDragStart: () -> Unit, private val onDrop: (DraggedApp, AppDropTarget) -> Unit) {
@@ -53,12 +53,12 @@ internal class AppDragController(private val onDragStart: () -> Unit, private va
         }.maxByOrNull { it.priority }
     }
 
-    fun begin(app: AppEntry, source: LayoutArea?, token: Any, point: Offset, touchSlop: Float, folderId: String?, movingFolderId: String? = null) {
+    fun begin(app: AppEntry, source: LayoutArea?, token: Any, point: Offset, touchSlop: Float, folderId: String?, movingFolderId: String? = null, desktopPage: Int? = null) {
         start = point
         position = point
         slop = touchSlop
         dismissedFolders.clear()
-        held = DraggedApp(app, source, token, folderId, movingFolderId)
+        held = DraggedApp(app, source, token, folderId, movingFolderId, desktopPage)
         active = null
     }
 
@@ -113,12 +113,12 @@ internal fun Modifier.appDropTarget(target: AppDropTarget, priority: Int = 0, ce
 @Composable
 internal fun Modifier.appIconGestures(
     app: AppEntry, area: LayoutArea?, enabled: Boolean,
-    onClick: (() -> Unit)?, onMenu: (() -> Unit)?, folderId: String? = null, movingFolderId: String? = null
+    onClick: (() -> Unit)?, onMenu: (() -> Unit)?, folderId: String? = null, movingFolderId: String? = null, desktopPage: Int? = null
 ): Modifier {
     val drag = LocalAppDrag.current
     if (drag == null) return if (onClick == null && onMenu == null) this
         else combinedClickable(onClick = onClick ?: {}, onLongClick = onMenu)
-    val token = remember(app.key, area, folderId) { Any() }
+    val token = remember(app.key, area, folderId, desktopPage) { Any() }
     val bounds = remember { mutableStateOf(Rect.Zero) }
     val menu by rememberUpdatedState(onMenu)
     val click by rememberUpdatedState(onClick)
@@ -144,7 +144,7 @@ internal fun Modifier.appIconGestures(
             detectDragGesturesAfterLongPress(
                 onDragStart = { point ->
                     feedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                    drag.begin(app, area, token, bounds.value.topLeft + point, viewConfiguration.touchSlop, folderId, movingFolderId)
+                    drag.begin(app, area, token, bounds.value.topLeft + point, viewConfiguration.touchSlop, folderId, movingFolderId, desktopPage)
                     showMenu()
                 },
                 onDragEnd = { drag.finish(token) },

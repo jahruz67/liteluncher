@@ -38,15 +38,19 @@ internal object LauncherBackup {
     }
 
     /** Embed picked icon images so exports do not depend on another device's URI grants. */
-    fun portableIcons(context: Context, json: String): String {
+    fun portableIcons(context: Context, json: String, onMissingIcons: (Int) -> Unit = {}): String {
         val format = Json { encodeDefaults = true }
         val state = format.decodeFromString(LauncherState.serializer(), json)
+        var missing = 0
+        fun icon(uri: String, fallback: BackupIcon?): BackupIcon? = runCatching { readIcon(context, uri) }
+            .getOrElse { if (fallback == null) missing++; fallback }
         val overrides = state.overrides.mapValues { (_, override) ->
-            if (override.iconUri.isBlank()) override else override.copy(iconUri = "", backupIcon = readIcon(context, override.iconUri))
+            if (override.iconUri.isBlank()) override else override.copy(iconUri = "", backupIcon = icon(override.iconUri, override.backupIcon))
         }
         val folders = state.folders.map { folder ->
-            if (folder.iconUri.isBlank()) folder else folder.copy(iconUri = "", backupIcon = readIcon(context, folder.iconUri))
+            if (folder.iconUri.isBlank()) folder else folder.copy(iconUri = "", backupIcon = icon(folder.iconUri, folder.backupIcon))
         }
+        onMissingIcons(missing)
         return format.encodeToString(state.copy(overrides = overrides, folders = folders)).also {
             require(it.toByteArray(Charsets.UTF_8).size <= MAX_BYTES) { "Backup with icon images exceeds the 1 MiB limit" }
         }
@@ -189,7 +193,12 @@ internal object LauncherBackup {
         val dockItems = documents.getValue("dock.xml").children
         val folderNodes = documents["folders.xml"]?.children("folder").orEmpty()
         val desktopBoards = boards.filter { it !== home }
-        val prefs = preferences(documents.getValue("settings.xml"), desktopBoards.size.coerceAtLeast(1))
+        val basePrefs = preferences(documents.getValue("settings.xml"), desktopBoards.size.coerceAtLeast(1))
+        val homeWidgets = home.children("widget")
+        require(desktopBoards.size + (if (homeWidgets.isNotEmpty()) 1 else 0) <= 16) { "Backup contains more than 16 desktop pages" }
+        val prefs = if (homeWidgets.isEmpty()) basePrefs else basePrefs.copy(desktop = basePrefs.desktop.copy(
+            pageCount = desktopBoards.size + 1, columns = maxOf(basePrefs.desktop.columns, basePrefs.home.columns),
+            rows = maxOf(basePrefs.desktop.rows, basePrefs.home.rows)))
         val containers = linkedMapOf("home" to homeItems, "dock" to dockItems)
         desktopBoards.forEachIndexed { index, board -> containers["desktop:$index"] = board.ordered() }
         folderNodes.forEach { containers["folder:lynx-${it["id"]}"] = it.children }
@@ -221,7 +230,7 @@ internal object LauncherBackup {
                     if (container == "home") prefs.home.rows else prefs.desktop.rows)
             }
         }
-        val pendingWidgets = desktopBoards.flatMapIndexed { page, board ->
+        val pendingWidgets = (desktopBoards + if (homeWidgets.isEmpty()) emptyList() else listOf(home)).flatMapIndexed { page, board ->
             board.children("widget").map { node ->
                 val key = "lynx-widget:$page:${node["id"]}"
                 val position = node.position(key, "desktop:$page", prefs.desktop.columns, prefs.desktop.rows)
@@ -251,15 +260,15 @@ internal object LauncherBackup {
     }
 
     private fun orderedFavorites(nodes: List<Node>): List<String> {
-        val byName = nodes.associateBy { it["name"] }
-        val successors = nodes.map { it["next"] }.toSet()
+        val byName = nodes.associateBy { it["name"] to it["profile"] }
+        val successors = nodes.map { it["next"] to it["profile"] }.toSet()
         val visited = mutableSetOf<String>()
         val result = mutableListOf<String>()
-        for (start in nodes.filter { it["name"] !in successors } + nodes) {
+        for (start in nodes.filter { (it["name"] to it["profile"]) !in successors } + nodes) {
             var current: Node? = start
-            while (current != null && visited.add(current["name"])) {
+            while (current != null && visited.add(appKey(current).orEmpty())) {
                 appKey(current)?.let(result::add)
-                current = byName[current["next"]]
+                current = byName[current["next"] to current["profile"]]
             }
         }
         return result.distinct()
@@ -269,15 +278,35 @@ internal object LauncherBackup {
         val values = settings.children.associate { it.name to it["value"] }
         fun flag(name: String, default: Boolean): Boolean = values[name]?.toBooleanStrictOrNull() ?: default
         fun number(name: String, default: Int): Int = values[name]?.toIntOrNull() ?: default
+        fun scale(name: String, default: Float): Float = values[name]?.toFloatOrNull()?.takeIf { it.isFinite() } ?: default
+        fun text(name: String, default: String): String = values[name]?.takeIf { it.isNotBlank() } ?: default
         val defaults = LauncherPrefs()
+        fun grid(prefix: String, default: GridPrefs) = default.copy(
+            columns = number("${prefix}_columns", default.columns), rows = number("${prefix}_rows", default.rows),
+            labels = flag("${prefix}_show_text", default.labels), multiline = flag("${prefix}_multiline", default.multiline),
+            iconScale = scale("${prefix}_icon_scale", default.iconScale), textScale = scale("${prefix}_text_scale", default.textScale),
+            padding = number("${prefix}_padding", default.padding), spacing = number("${prefix}_spacing", default.spacing),
+            listMode = flag("${prefix}_list_mode", default.listMode), preventChanges = flag("${prefix}_prevent_changes", default.preventChanges)
+        )
         val desktopColumns = number("desktop_columns_portrait", defaults.desktop.columns)
         val desktopRows = number("desktop_rows_portrait", defaults.desktop.rows)
         return defaults.copy(
-            home = defaults.home.copy(columns = number("home_columns", defaults.home.columns), rows = number("home_rows", defaults.home.rows)),
-            clock = defaults.clock.copy(clockApp = appKey(values["home_clock_app"].orEmpty()) ?: defaults.clock.clockApp),
-            dock = defaults.dock.copy(allApps = flag("dock_show_all_apps", defaults.dock.allApps)),
+            home = grid("home", defaults.home), drawer = grid("apps", defaults.drawer),
+            clock = defaults.clock.copy(clockApp = appKey(values["home_clock_app"].orEmpty()) ?: defaults.clock.clockApp,
+                enabled = flag("home_show_time", defaults.clock.enabled), analog = flag("home_analog_clock", defaults.clock.analog),
+                use24Hour = flag("home_24_hour", defaults.clock.use24Hour), showDate = flag("home_show_date", defaults.clock.showDate),
+                showDay = flag("home_show_day", defaults.clock.showDay), showYear = flag("home_show_year", defaults.clock.showYear),
+                size = number("home_clock_size", defaults.clock.size), color = text("home_clock_color", defaults.clock.color)),
+            dock = defaults.dock.copy(allApps = flag("dock_show_all_apps", defaults.dock.allApps),
+                enabled = flag("dock_show", defaults.dock.enabled), side = text("dock_position", defaults.dock.side),
+                autoHide = flag("dock_auto_hide", defaults.dock.autoHide), hideOnScroll = flag("dock_hide_on_scroll", defaults.dock.hideOnScroll),
+                showWhenScrolling = flag("dock_show_when_scrolling", defaults.dock.showWhenScrolling),
+                maxItems = number("dock_max_items", defaults.dock.maxItems), folderStack = flag("dock_folder_stack", defaults.dock.folderStack),
+                labels = flag("dock_show_text", defaults.dock.labels), iconScale = scale("dock_icon_scale", defaults.dock.iconScale)),
             desktop = defaults.desktop.copy(columns = desktopColumns, rows = desktopRows, pageCount = pages,
-                grid = defaults.desktop.grid.copy(columns = desktopColumns, rows = desktopRows)),
+                grid = grid("desktop", defaults.desktop.grid).copy(columns = desktopColumns, rows = desktopRows),
+                preventChanges = flag("desktop_prevent_changes", defaults.desktop.preventChanges),
+                rounded = flag("desktop_rounded", defaults.desktop.rounded), widgetPadding = flag("desktop_widget_padding", defaults.desktop.widgetPadding)),
             search = defaults.search.copy(
                 apps = flag("search_in_apps", defaults.search.apps), hiddenApps = flag("search_hidden_apps", defaults.search.hiddenApps),
                 contacts = flag("search_in_contacts", defaults.search.contacts), shortcuts = flag("search_in_shortcuts", defaults.search.shortcuts),
@@ -285,9 +314,19 @@ internal object LauncherBackup {
                 web = flag("search_in_web", defaults.search.web), playStore = flag("search_google_play", defaults.search.playStore),
                 website = flag("search_website", defaults.search.website)
             ),
-            favorites = defaults.favorites.copy(showContacts = flag("favorites_show_contact", defaults.favorites.showContacts)),
+            favorites = defaults.favorites.copy(showContacts = flag("favorites_show_contact", defaults.favorites.showContacts),
+                grid = grid("favorites", defaults.favorites.grid), maxItems = number("favorites_max_items", defaults.favorites.maxItems),
+                byUsage = flag("favorites_by_usage", defaults.favorites.byUsage), excludeDock = flag("favorites_exclude_dock", defaults.favorites.excludeDock),
+                excludeFolders = flag("favorites_exclude_folders", defaults.favorites.excludeFolders)),
             folders = defaults.folders.copy(labels = flag("folder_show_text", defaults.folders.labels)),
-            badges = defaults.badges.copy(enabled = flag("badge_show", defaults.badges.enabled)),
+            badges = defaults.badges.copy(enabled = flag("badge_show", defaults.badges.enabled), color = text("badge_color", defaults.badges.color),
+                counts = flag("badge_counts", defaults.badges.counts), scale = scale("badge_scale", defaults.badges.scale)),
+            appearance = defaults.appearance.copy(accent = text("accent_color", defaults.appearance.accent),
+                iconPack = text("icon_pack", defaults.appearance.iconPack), dim = scale("background_dim", defaults.appearance.dim)),
+            behavior = defaults.behavior.copy(lockRotation = flag("lock_rotation", defaults.behavior.lockRotation),
+                showStatusBar = flag("show_status_bar", defaults.behavior.showStatusBar), returnHome = flag("return_home", defaults.behavior.returnHome),
+                wallpaperScroll = text("wallpaper_scroll", defaults.behavior.wallpaperScroll),
+                wallpaperAlignment = text("wallpaper_alignment", defaults.behavior.wallpaperAlignment)),
             navigation = defaults.navigation.copy(infinite = values["screen_infinite_scrolling"]?.let { it != "0" } ?: defaults.navigation.infinite)
         )
     }

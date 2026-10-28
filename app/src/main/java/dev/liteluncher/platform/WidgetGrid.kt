@@ -15,7 +15,8 @@ internal object WidgetGrid {
             others.none { it.id != item.id && overlaps(item, it) }
 
     fun place(item: WidgetItem, others: List<WidgetItem>, columns: Int, rows: Int): WidgetItem? {
-        val bounded = item.copy(columns = item.columns.coerceIn(1, columns), rows = item.rows.coerceIn(1, rows))
+        if (item.columns !in 1..columns || item.rows !in 1..rows) return null
+        val bounded = item
         if (fits(bounded, others, columns, rows)) return bounded
         for (row in 0..(rows - bounded.rows)) {
             for (column in 0..(columns - bounded.columns)) {
@@ -28,11 +29,11 @@ internal object WidgetGrid {
 
     data class Layout(val placed: List<WidgetItem>, val overflow: List<WidgetItem>)
 
-    fun arrange(items: List<WidgetItem>, columns: Int, rows: Int): Layout {
+    fun arrange(items: List<WidgetItem>, columns: Int, rows: Int, blocked: List<WidgetItem> = emptyList()): Layout {
         val placed = mutableListOf<WidgetItem>()
         val overflow = mutableListOf<WidgetItem>()
         items.distinctBy { it.id }.forEach { item ->
-            val next = place(item, placed, columns, rows)
+            val next = place(item, placed + blocked, columns, rows)
             if (next == null) overflow += item else placed += next
         }
         return Layout(placed, overflow)

@@ -20,6 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,7 +50,8 @@ internal fun rememberBackupBitmap(icon: BackupIcon?): Bitmap? {
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
                 } else if (icon != null && icon.packageName.isNotBlank() && icon.resourceName.isNotBlank()) {
                     val resources = context.packageManager.getResourcesForApplication(icon.packageName)
-                    val id = resources.getIdentifier(icon.resourceName.substringAfterLast('/'), "drawable", icon.packageName)
+                    val type = icon.resourceName.substringBeforeLast('/', "drawable").substringAfter(':')
+                    val id = resources.getIdentifier(icon.resourceName.substringAfterLast('/'), type, icon.packageName)
                     if (id == 0) null else resources.getDrawable(id, null).toBitmap(168, 168)
                 } else null
             }.getOrNull()
@@ -61,10 +66,10 @@ internal fun ShortcutTile(shortcut: PinnedShortcut, state: LauncherState, apps: 
     val context = LocalContext.current
     val bitmap = rememberBackupBitmap(shortcut.backupIcon)
     val app = apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
-    Column(modifier.combinedClickable(onClick = {
+    Column(modifier.semantics { contentDescription = shortcut.label }.combinedClickable(onClick = {
         val user = context.getSystemService(UserManager::class.java)?.getUserForSerialNumber(shortcut.userSerial)
         if (user == null) SystemActions.error(context, "This shortcut's profile is unavailable")
-        else if (repository.launchShortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))) onLaunch()
+        else if (actions.shortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))) onLaunch()
     }, onLongClick = {
         val locked = when {
             shortcut.container == "dock" -> state.prefs.dock.preventChanges
@@ -72,7 +77,15 @@ internal fun ShortcutTile(shortcut: PinnedShortcut, state: LauncherState, apps: 
             shortcut.container.startsWith("desktop:") -> state.prefs.desktop.preventChanges
             else -> state.prefs.home.preventChanges
         }
-        if (!locked) actions.update { current -> current.copy(shortcuts = current.shortcuts.filterNot { it.layoutKey == shortcut.layoutKey }) }
+        if (!locked) actions.update { current ->
+            val stillLocked = when {
+                shortcut.container == "dock" -> current.prefs.dock.preventChanges
+                shortcut.container.startsWith("desktop:") -> current.prefs.desktop.preventChanges
+                shortcut.container.startsWith("folder:") -> current.folderLocked(shortcut.container.substringAfter(':'))
+                else -> current.prefs.home.preventChanges
+            }
+            if (stillLocked) current else current.copy(shortcuts = current.shortcuts.filterNot { it.layoutKey == shortcut.layoutKey && it.container == shortcut.container })
+        }
     }).padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (56 * prefs.iconScale).toInt()
         when {
@@ -89,18 +102,43 @@ internal fun ShortcutTile(shortcut: PinnedShortcut, state: LauncherState, apps: 
 internal fun WorkspaceEntry(key: String, container: String, state: LauncherState, apps: List<AppEntry>, repository: AppsRepository,
     prefs: GridPrefs, badges: Map<String, Int>, actions: WorkspaceActions, modifier: Modifier = Modifier, onLaunch: () -> Unit = {}) {
     val folder = if (key.startsWith("folder:")) state.folders.find { "folder:${it.id}" == key } else null
-    val shortcut = state.shortcuts.find { it.layoutKey == key }
+    val shortcut = state.shortcuts.find { it.layoutKey == key && it.container == container }
     val app = apps.find { it.key == key }
     val area = when (container) { "home" -> LayoutArea.HOME; "dock" -> LayoutArea.DOCK; else -> null }
+    val locked = when {
+        container.startsWith("desktop:") -> state.prefs.desktop.preventChanges
+        container.startsWith("folder:") -> state.folderLocked(container.substringAfter(':'))
+        area != null -> state.layoutLocked(area)
+        else -> true
+    }
+    var removal by remember(key, container) { mutableStateOf(false) }
+    fun remove() { actions.update { current ->
+        val currentLocked = when {
+            container.startsWith("desktop:") -> current.prefs.desktop.preventChanges
+            container.startsWith("folder:") -> current.folderLocked(container.substringAfter(':'))
+            area != null -> current.layoutLocked(area)
+            else -> true
+        }
+        if (currentLocked) current else when {
+            container.startsWith("desktop:") -> current.copy(desktopApps = current.desktopApps.mapValues { (page, entries) -> if (container == "desktop:$page") entries - key else entries })
+            container.startsWith("folder:") -> current.copy(folders = current.folders.map { if (container == "folder:${it.id}") it.copy(apps = it.apps - key) else it })
+            area != null -> removeLayoutApp(current, area, key)
+            else -> current
+        }
+    }; removal = false }
+    if (removal) AlertDialog(onDismissRequest = { removal = false }, title = { Text("Remove entry?") }, text = { Text(key) },
+        confirmButton = { TextButton(onClick = { remove() }) { Text("Remove") } },
+        dismissButton = { TextButton(onClick = { removal = false }) { Text("Cancel") } })
     when {
         folder != null -> FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, container == "dock") },
-            { actions.folderActions(folder) }, modifier)
+            { actions.folderActions(folder) }, modifier, container)
         shortcut != null -> ShortcutTile(shortcut, state, apps, repository, prefs, actions, modifier, onLaunch)
         app != null -> AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app); onLaunch() },
             { if (container == "dock") actions.dockMenu(app) else actions.menu(app) }, modifier,
-            draggable = (area != null && !state.layoutLocked(area)) || (container.startsWith("folder:") && !state.folderLocked(container.substringAfter(':'))),
-            dragArea = area, dragFolderId = container.takeIf { it.startsWith("folder:") }?.substringAfter(':'))
-        else -> Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            draggable = !locked,
+            dragArea = area, dragFolderId = container.takeIf { it.startsWith("folder:") }?.substringAfter(':'),
+            desktopPage = container.takeIf { it.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull())
+        else -> Column(modifier.combinedClickable(onClick = {}, onLongClick = { removal = !locked }), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(Icons.Rounded.Apps, "App not installed", Modifier.size(40.dp), tint = Muted)
             if (prefs.labels) Text(key.substringBefore('/'), fontSize = 10.sp, maxLines = 2, textAlign = TextAlign.Center)
         }
@@ -110,10 +148,35 @@ internal fun WorkspaceEntry(key: String, container: String, state: LauncherState
 @Composable
 internal fun PositionedWorkspace(container: String, state: LauncherState, apps: List<AppEntry>, repository: AppsRepository,
     prefs: GridPrefs, badges: Map<String, Int>, actions: WorkspaceActions, modifier: Modifier = Modifier) {
+    if (prefs.listMode && !container.startsWith("desktop:")) {
+        Column(modifier.verticalScroll(rememberScrollState())) {
+            state.workspaceKeys(container).forEach { key ->
+                val app = apps.find { it.key == key }
+                if (app != null) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs,
+                    draggable = container == "home" && !state.prefs.home.preventChanges,
+                    dragArea = if (container == "home") LayoutArea.HOME else null)
+                else WorkspaceEntry(key, container, state, apps, repository, prefs, badges, actions, Modifier.fillMaxWidth().height(88.dp))
+            }
+        }
+        return
+    }
     val positions = remember(state, container, prefs.columns, prefs.rows) { state.workspacePositions(container, prefs.columns, prefs.rows) }
-    BoxWithConstraints(modifier) {
+    val overflow = state.workspaceKeys(container).filterNot { key -> positions.any { it.key == key } }
+    Column(modifier) {
+    if (overflow.isNotEmpty()) Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
+        Text("Entries outside the grid", style = MaterialTheme.typography.labelSmall)
+        overflow.forEach { key -> WorkspaceEntry(key, container, state, apps, repository, prefs.copy(iconScale = .5f, labels = true), badges, actions, Modifier.fillMaxWidth().height(76.dp)) }
+    }
+    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
         val cellWidth = maxWidth / prefs.columns
         val cellHeight = maxHeight / prefs.rows
+        val page = container.takeIf { it.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull()
+        if (page != null && !state.prefs.desktop.preventChanges && LocalAppDrag.current?.active != null) {
+            repeat(prefs.rows) { row -> repeat(prefs.columns) { column ->
+                Box(Modifier.offset(cellWidth * column, cellHeight * row).width(cellWidth).height(cellHeight)
+                    .appDropTarget(AppDropTarget.DesktopCell(page, column, row), 1))
+            } }
+        }
         positions.forEach { position ->
             key(position.key) {
                 WorkspaceEntry(position.key, container, state, apps, repository, prefs, badges, actions,
@@ -121,6 +184,7 @@ internal fun PositionedWorkspace(container: String, state: LauncherState, apps: 
                         .width(cellWidth * position.columns).height(cellHeight * position.rows))
             }
         }
+    }
     }
 }
 

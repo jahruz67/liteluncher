@@ -10,6 +10,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,6 +54,17 @@ fun iconShape(shape: IconShape): Shape = when (shape) {
 }
 
 @Composable
+internal fun badgeCounts(prefs: LauncherPrefs): Boolean = when (prefs.badges.style) {
+    "Count" -> true
+    "Dot" -> false
+    else -> when (prefs.appearance.mode) {
+        ThemeMode.LIGHT -> false
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        else -> true
+    }
+}
+
+@Composable
 fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, size: Int = 48, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val override = state.overrides[app.key]
@@ -77,9 +89,11 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
         }
     }
     val shape = iconShape(override?.shape ?: state.prefs.appearance.iconShape)
-    Box(modifier.size(size.dp).clip(shape), contentAlignment = Alignment.Center) {
+    Box(modifier.size(size.dp).clip(shape)
+        .then(if (state.prefs.appearance.forceAdaptive) Modifier.background(MaterialTheme.colorScheme.surface) else Modifier), contentAlignment = Alignment.Center) {
         val displayed = backupBitmap ?: bitmap
-        if (displayed != null) Image(displayed.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        if (displayed != null) Image(displayed.asImageBitmap(), contentDescription = null,
+            modifier = Modifier.fillMaxSize().then(if (state.prefs.appearance.forceAdaptive) Modifier.padding((size * .12f).dp) else Modifier), contentScale = ContentScale.Fit)
         else Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {
             Text(app.label.take(1).uppercase(), color = Cerulean, fontSize = (size / 2).sp)
         }
@@ -90,21 +104,22 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
 fun AppTile(
     app: AppEntry, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
     badgeCount: Int, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier,
-    draggable: Boolean = false, dragArea: LayoutArea? = null, dragFolderId: String? = null
+    draggable: Boolean = false, dragArea: LayoutArea? = null, dragFolderId: String? = null, desktopPage: Int? = null
 ) {
     val label = state.overrides[app.key]?.label?.takeIf { it.isNotBlank() } ?: app.label
     val iconSize = (56 * prefs.iconScale).toInt()
     val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
-    Column(modifier.clip(RoundedCornerShape(16.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick, dragFolderId)
+    val showCount = badgeCounts(state.prefs)
+    Column(modifier.clip(RoundedCornerShape(16.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick, dragFolderId, desktopPage = desktopPage)
         .padding(vertical = 8.dp, horizontal = 2.dp).semantics { contentDescription = label },
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box {
             AppIcon(app, repository, state, iconSize)
             if (state.prefs.badges.enabled && badgeCount > 0) {
-                val badgeSize = ((if (state.prefs.badges.counts) 19 else 10) * state.prefs.badges.scale).dp
+                val badgeSize = ((if (showCount) 19 else 10) * state.prefs.badges.scale).dp
                 Box(Modifier.align(Alignment.TopEnd).offset(3.dp, (-3).dp).size(badgeSize)
                     .background(parseColor(state.prefs.badges.color), CircleShape).border(2.dp, Ink, CircleShape), contentAlignment = Alignment.Center) {
-                    if (state.prefs.badges.counts) Text(if (badgeCount > 99) "99+" else "$badgeCount", color = Ink, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    if (showCount) Text(if (badgeCount > 99) "99+" else "$badgeCount", color = contrastContent(parseColor(state.prefs.badges.color)), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -118,39 +133,56 @@ fun AppTile(
 
 @Composable
 fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
-    onClick: () -> Unit, onLongClick: () -> Unit = {}, modifier: Modifier = Modifier) {
-    val backupBitmap = rememberBackupBitmap(folder.backupIcon)
-    val representative = apps.firstOrNull { it.key in folder.apps }
-    val area = if (folder.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
-    Column(modifier.clip(RoundedCornerShape(16.dp)).appDropTarget(AppDropTarget.Folder(folder.id), 3)
-        .then(if (representative != null) Modifier.appIconGestures(representative, area,
-            !state.folderLocked(folder.id) && (folder.id in state.homeFolders || folder.id in state.dockFolders), onClick, onLongClick, movingFolderId = folder.id)
-        else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)).padding(vertical = 8.dp),
+    onClick: () -> Unit, onLongClick: () -> Unit = {}, modifier: Modifier = Modifier, container: String = "home") {
+    val context = LocalContext.current
+    val customBitmap by produceState<android.graphics.Bitmap?>(null, folder.iconUri) {
+        value = withContext(Dispatchers.IO) { runCatching {
+            context.contentResolver.openInputStream(android.net.Uri.parse(folder.iconUri))?.use { stream ->
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeStream(stream, null, bounds)
+                var sample = 1
+                while (bounds.outWidth / sample > 256 || bounds.outHeight / sample > 256) sample *= 2
+                context.contentResolver.openInputStream(android.net.Uri.parse(folder.iconUri))?.use {
+                    BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+                }
+            }
+        }.getOrNull() }
+    }
+    val backupBitmap = customBitmap ?: rememberBackupBitmap(folder.backupIcon)
+    val representative = apps.firstOrNull { it.key in folder.apps } ?: AppEntry("folder:${folder.id}", context.packageName,
+        folder.name, android.content.ComponentName(context, dev.liteluncher.MainActivity::class.java), android.os.Process.myUserHandle())
+    val area = if (container == "dock") LayoutArea.DOCK else LayoutArea.HOME
+    val folderPrefs = state.prefs.folders
+    Column(modifier.semantics { contentDescription = folder.name }.clip(RoundedCornerShape(16.dp)).appDropTarget(AppDropTarget.Folder(folder.id), 3)
+        .then(Modifier.appIconGestures(representative, area,
+            !state.folderLocked(folder.id) && (container == "home" && folder.id in state.homeFolders || container == "dock" && folder.id in state.dockFolders), onClick, onLongClick, movingFolderId = folder.id)
+        ).padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (56 * prefs.iconScale).dp
-        val folderColor = parseColor(state.prefs.folders.color)
-        val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
-        val shape = iconShape(folder.shape ?: state.prefs.folders.shape)
+        val folderColor = if (folderPrefs.background == "Custom") parseColor(folderPrefs.color)
+            else surfaceColor(state.prefs.appearance.launcher, MaterialTheme.colorScheme.primary)
+        val shape = iconShape(folder.shape ?: folderPrefs.shape)
         Box(Modifier.size(size).clip(shape)
-            .background(folderColor.copy(alpha = folderColor.alpha * state.prefs.folders.opacity)), contentAlignment = Alignment.Center) {
+            .background(folderColor.copy(alpha = folderColor.alpha * folderPrefs.opacity)), contentAlignment = Alignment.Center) {
             val members = remember(folder.apps, apps) {
                 folder.apps.asSequence().mapNotNull { key -> apps.find { it.key == key } }.take(4).toList()
             }
             if (backupBitmap != null) Image(backupBitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-            else if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = Cerulean)
-            else if (state.prefs.folders.stacked) {
+            else if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = parseColor(folderPrefs.iconColor, Cerulean))
+            else if (folderPrefs.stacked) {
                 members.take(3).reversed().forEachIndexed { index, app ->
-                    AppIcon(app, repository, state, (28 * state.prefs.folders.iconScale).toInt(), Modifier.offset((index * 7 - 7).dp, (index * 5 - 5).dp))
+                    AppIcon(app, repository, state, (28 * folderPrefs.iconScale).toInt(), Modifier.offset((index * 7 - 7).dp, (index * 5 - 5).dp))
                 }
             } else Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 members.chunked(2).forEach { row -> Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    row.forEach { AppIcon(it, repository, state, (18 * state.prefs.folders.iconScale).toInt()) }
+                    row.forEach { AppIcon(it, repository, state, (18 * folderPrefs.iconScale).toInt()) }
                 } }
             }
         }
-        if (prefs.labels) {
+        if (folderPrefs.labels) {
             Spacer(Modifier.height(5.dp))
-            Text(folder.name, fontSize = (12 * textScale).sp, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            Text(folder.name, fontSize = (12 * folderPrefs.textScale).sp,
+                maxLines = if (folderPrefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         }
     }
 }

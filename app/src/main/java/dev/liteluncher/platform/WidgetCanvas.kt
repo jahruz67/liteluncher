@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.liteluncher.data.DesktopPrefs
 import dev.liteluncher.data.WidgetItem
+import dev.liteluncher.data.borderPaddingDp
 import kotlin.math.roundToInt
 
 private val ResizeColor = Color.White
@@ -53,11 +54,12 @@ fun WidgetCanvas(
     modifier: Modifier = Modifier,
     onWidgetDeleted: ((WidgetItem) -> Unit)? = null,
     onCanvasBounds: (Rect) -> Unit = {},
+    blocked: List<WidgetItem> = emptyList(),
     overlay: @Composable BoxWithConstraintsScope.() -> Unit = {}
 ) {
     val columns = prefs.columns.coerceIn(1, 24)
     val rows = prefs.rows.coerceIn(1, 32)
-    val layout = remember(widgets, columns, rows) { WidgetGrid.arrange(widgets, columns, rows) }
+    val layout = remember(widgets, columns, rows, blocked) { WidgetGrid.arrange(widgets, columns, rows, blocked) }
     val arranged = remember(widgets, layout) {
         val byId = layout.placed.associateBy { it.id }
         widgets.distinctBy { it.id }.map { byId[it.id] ?: it }
@@ -89,7 +91,8 @@ fun WidgetCanvas(
         draft = null
     }
 
-    Column(modifier.fillMaxSize().padding(prefs.padding.coerceIn(0, 64).dp)) {
+    val padding = if (prefs.grid.borderPadding == "Default") prefs.padding else prefs.grid.borderPaddingDp
+    Column(modifier.fillMaxSize().padding(padding.coerceIn(0, 64).dp)) {
         if (layout.overflow.isNotEmpty()) {
             Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
                 Text("Some widgets do not fit this grid. Increase the grid or free space.", style = MaterialTheme.typography.bodySmall)
@@ -107,7 +110,7 @@ fun WidgetCanvas(
             val canvasWidth = if (constraints.hasBoundedWidth) maxWidth else 360.dp
             val cellWidth = canvasWidth / columns
             val cellHeight = canvasHeight / rows
-            val gutter = 2.dp
+            val gutter = if (prefs.widgetPadding) 8.dp else 0.dp
             SideEffect { controller.syncGeometry(prefs, canvasWidth.value, canvasHeight.value) }
             overlay()
 
@@ -116,7 +119,7 @@ fun WidgetCanvas(
                 Box(Modifier.fillMaxSize().clickable { resizingWidgetId = null; draft = null })
             }
             layout.placed.forEach { saved ->
-                key(saved.id, refreshes[saved.id] ?: 0) {
+                key(saved.id, refreshes[saved.id] ?: 0, providerChanges) {
                     val item = draft?.takeIf { it.id == saved.id } ?: saved
                     val isResizing = resizingWidgetId == item.id
                     val itemWidth = (cellWidth * item.columns - gutter * 2).coerceAtLeast(1.dp)
@@ -131,7 +134,30 @@ fun WidgetCanvas(
                             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(radius))
                                 .then(if (isResizing) Modifier.border(BorderStroke(2.dp, ResizeColor), RoundedCornerShape(radius)) else Modifier)
                                 .semantics {
-                                    customActions = listOf(CustomAccessibilityAction("Edit widget") { onEdit(); true })
+                                    customActions = listOf(CustomAccessibilityAction("Edit widget") { onEdit(); true }) +
+                                        if (prefs.preventChanges) emptyList() else listOf(
+                                            "Move left" to item.copy(column = item.column - 1),
+                                            "Move right" to item.copy(column = item.column + 1),
+                                            "Move up" to item.copy(row = item.row - 1),
+                                            "Move down" to item.copy(row = item.row + 1),
+                                            "Widen" to item.copy(columns = item.columns + 1),
+                                            "Narrow" to item.copy(columns = item.columns - 1),
+                                            "Make taller" to item.copy(rows = item.rows + 1),
+                                            "Make shorter" to item.copy(rows = item.rows - 1)
+                                        ).map { (label, candidate) -> CustomAccessibilityAction(label) {
+                                            val info = controller.provider(item.id)
+                                            val min = info?.let { controller.minimumSpan(it) } ?: (1 to 1)
+                                            val max = info?.let { controller.maximumSpan(it) } ?: (columns to rows)
+                                            val horizontal = candidate.columns != item.columns
+                                            val vertical = candidate.rows != item.rows
+                                            val mode = info?.resizeMode ?: AppWidgetProviderInfo.RESIZE_NONE
+                                            val valid = candidate.columns in min.first..max.first && candidate.rows in min.second..max.second &&
+                                                (!horizontal || mode and AppWidgetProviderInfo.RESIZE_HORIZONTAL != 0) &&
+                                                (!vertical || mode and AppWidgetProviderInfo.RESIZE_VERTICAL != 0) &&
+                                                WidgetGrid.fits(candidate, layout.placed + blocked, columns, rows)
+                                            if (valid) currentChange(currentItems.map { if (it.id == item.id) candidate else it })
+                                            valid
+                                        } }
                                 },
                             onRelease = { it.release() }, onReset = null,
                             update = { frame -> frame.updateSize(itemWidth.value.roundToInt().coerceAtLeast(1),
@@ -158,7 +184,7 @@ fun WidgetCanvas(
                                     val candidate = origin.copy(
                                         column = (origin.column + delta.first).coerceIn(0, columns - origin.columns),
                                         row = (origin.row + delta.second).coerceIn(0, rows - origin.rows))
-                                    if (WidgetGrid.fits(candidate, currentItems, columns, rows)) draft = candidate
+                                    if (WidgetGrid.fits(candidate, layout.placed + blocked, columns, rows)) draft = candidate
                                 }, onCommit = {
                                     draft?.let { changed -> currentChange(currentItems.map { if (it.id == changed.id) changed else it }) }
                                     draft = null
@@ -182,7 +208,7 @@ fun WidgetCanvas(
                                     .widgetGridDrag(item, cellWidth.value, cellHeight.value,
                                         onPreview = { origin, delta ->
                                             val candidate = resizeWidget(origin, edge, delta, minSpan, maxSpan, columns, rows)
-                                            if (candidate != null && WidgetGrid.fits(candidate, currentItems, columns, rows)) draft = candidate
+                                            if (candidate != null && WidgetGrid.fits(candidate, layout.placed + blocked, columns, rows)) draft = candidate
                                         }, onCommit = {
                                             draft?.let { changed -> currentChange(currentItems.map { if (it.id == changed.id) changed else it }) }
                                             draft = null

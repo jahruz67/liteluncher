@@ -19,6 +19,7 @@ import dev.liteluncher.data.LauncherBackup
 import dev.liteluncher.data.LayoutArea
 import dev.liteluncher.data.PinnedShortcut
 import dev.liteluncher.data.layoutSpace
+import dev.liteluncher.data.desktopObstacles
 import dev.liteluncher.platform.SystemActions
 import dev.liteluncher.platform.WidgetController
 import dev.liteluncher.platform.WidgetGrid
@@ -41,14 +42,16 @@ class MainActivity : ComponentActivity() {
     }
     private val exportBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) lifecycleScope.launch {
+            var missingIcons = 0
             runCatching {
                 val json = model.store.exportJson()
                 withContext(Dispatchers.IO) {
-                    val portable = LauncherBackup.portableIcons(this@MainActivity, json)
+                    val portable = LauncherBackup.portableIcons(this@MainActivity, json) { missingIcons = it }
                     contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(portable) }
                         ?: error("Cannot open the selected document")
                 }
-            }.onSuccess { toast("Launcher backup saved") }.onFailure { toast(it.message ?: "Backup failed") }
+            }.onSuccess { toast(if (missingIcons == 0) "Launcher backup saved" else "Backup saved; $missingIcons unavailable custom icons omitted") }
+                .onFailure { toast(it.message ?: "Backup failed") }
         }
     }
     private val importBackup = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -79,15 +82,17 @@ class MainActivity : ComponentActivity() {
                 withContext(NonCancellable) {
                     val saved = runCatching {
                         model.store.updateAndAwait { state ->
+                            require(!state.prefs.desktop.preventChanges) { "Desktop is locked" }
                             val columns = state.prefs.desktop.columns
                             val rows = state.prefs.desktop.rows
                             val width = item.columns
                             val height = item.rows
                             require(width in 1..columns && height in 1..rows) { "This widget no longer fits the desktop grid" }
                             val others = state.widgets.filterNot { it.id == item.id }
+                            val occupied = others + state.desktopObstacles(item.restoreKey)
                             require(item.page in 0 until state.prefs.desktop.pageCount) { "This desktop page is no longer available" }
-                            val placed = if (item.restoreKey.isNotBlank()) item.takeIf { WidgetGrid.fits(it, others, columns, rows) }
-                                else WidgetGrid.place(item, others, columns, rows)
+                            val placed = if (item.restoreKey.isNotBlank()) item.takeIf { WidgetGrid.fits(it, occupied, columns, rows) }
+                                else WidgetGrid.place(item, occupied, columns, rows)
                             requireNotNull(placed) { "The widget canvas is full. Resize or remove a widget first." }
                             state.copy(widgets = others + placed,
                                 pendingWidgets = state.pendingWidgets.filterNot { it.key == item.restoreKey })
@@ -138,11 +143,11 @@ class MainActivity : ComponentActivity() {
                 val failure = shortcutPinError(state, shortcut)
                 require(failure == null) { failure.orEmpty() }
                 val existing = state.shortcuts.find {
-                    it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial
+                    it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial && it.container == "home"
                 }
                 state.copy(shortcuts = state.shortcuts.filterNot {
-                    it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial
-                } + (existing ?: shortcut))
+                    it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial && it.container == "home"
+                } + (existing ?: shortcut).copy(container = "home"))
             }.onFailure { toast(it.message ?: "The shortcut could not be saved") }
         }
     }
@@ -150,7 +155,7 @@ class MainActivity : ComponentActivity() {
     private fun shortcutPinError(state: LauncherState, shortcut: PinnedShortcut): String? {
         if (state.prefs.home.preventChanges) return "Home is locked"
         val alreadyPinned = state.shortcuts.any {
-            it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial
+            it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial && it.container == "home"
         }
         return if (!alreadyPinned && state.layoutSpace(LayoutArea.HOME) == 0)
             "Home is full. Remove an entry or increase the grid size." else null

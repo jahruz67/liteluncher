@@ -59,6 +59,7 @@ data class NativeShortcut(
 
 /** Launcher identities are flattened component names followed by | and the user's serial. */
 class AppsRepository(context: Context) : AutoCloseable {
+    var onShortcutLaunched: ((String) -> Unit)? = null
     private val context = context.applicationContext
     private val launcher = requireNotNull(this.context.getSystemService(LauncherApps::class.java))
     private val users = requireNotNull(this.context.getSystemService(UserManager::class.java))
@@ -173,10 +174,10 @@ class AppsRepository(context: Context) : AutoCloseable {
     }
 
     /** Search all represented apps with one shortcut query per user profile. */
-    fun shortcuts(apps: List<AppEntry>, limit: Int = 300): List<NativeShortcut> {
+    fun shortcuts(apps: List<AppEntry>, limit: Int = Int.MAX_VALUE): List<NativeShortcut> {
         if (limit <= 0 || !runCatching { launcher.hasShortcutHostPermission() }.getOrDefault(false)) return emptyList()
         val representatives = apps.distinctBy { it.packageName to it.user }
-        val activities = representatives.associateBy { it.component to it.user }
+        val activities = apps.associateBy { it.component to it.user }
         val matches = representatives.map { it.user }.distinct().filter(::profileAvailable).flatMap { user ->
             runCatching {
                 launcher.getShortcuts(LauncherApps.ShortcutQuery().apply {
@@ -255,25 +256,31 @@ class AppsRepository(context: Context) : AutoCloseable {
             SystemActions.error(context, "Unlock this shortcut's profile first.")
             return false
         }
-        // Keep visible imported shortcuts pinned to this host as well as the source launcher.
-        // Android may refuse a shortcut that its owning app no longer publishes.
-        runCatching {
-            if (launcher.hasShortcutHostPermission()) {
-                val pinned = launcher.getShortcuts(LauncherApps.ShortcutQuery().apply {
-                    setPackage(shortcut.packageName)
-                    setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
-                }, shortcut.user).orEmpty().map { it.id }
-                launcher.pinShortcuts(shortcut.packageName, (pinned + shortcut.id).distinct(), shortcut.user)
-            }
-        }
         return runCatching {
             launcher.startShortcut(shortcut.packageName, shortcut.id, null, null, shortcut.user)
+            mutableApps.value.firstOrNull { it.packageName == shortcut.packageName && it.user == shortcut.user }
+                ?.let { onShortcutLaunched?.invoke(it.key) }
             true
         }.getOrElse {
             SystemActions.error(context, "This shortcut is no longer available.")
             false
         }
     }
+
+    fun syncShortcutPins(shortcuts: List<dev.liteluncher.data.PinnedShortcut>): Boolean = runCatching {
+        check(launcher.hasShortcutHostPermission())
+        accessibleProfiles().forEach { user ->
+            val serial = users.getSerialNumberForUser(user)
+            val desired = shortcuts.filter { it.userSerial == serial }.groupBy { it.packageName }
+            val existing = launcher.getShortcuts(LauncherApps.ShortcutQuery().apply {
+                setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+            }, user).orEmpty().map { it.`package` }
+            (existing + desired.keys).distinct().forEach { pkg ->
+                launcher.pinShortcuts(pkg, desired[pkg].orEmpty().map { it.id }.distinct(), user)
+            }
+        }
+        true
+    }.getOrDefault(false)
 
     /** Requires the caller to request READ_CONTACTS; queries stay in the current profile. */
     fun contacts(query: String = "", limit: Int = Int.MAX_VALUE): List<ContactEntry> {

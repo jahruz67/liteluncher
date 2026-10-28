@@ -33,6 +33,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -83,7 +85,7 @@ fun HomeScreen(
         Modifier.fillMaxSize()
             .appDropTarget(AppDropTarget.Area(LayoutArea.HOME))
             .combinedClickable(onClick = {}, onLongClick = onEmpty, onDoubleClick = onDoubleTap)
-            .padding(horizontal = prefs.padding.dp)
+            .padding(horizontal = prefs.borderPaddingDp.dp)
     ) {
         if (showSearchBar && !barAtBottom) {
             Spacer(Modifier.height(8.dp))
@@ -105,7 +107,7 @@ fun HomeScreen(
             Spacer(Modifier.height(32.dp))
         }
 
-        if (state.positions.any { it.container == "home" }) {
+        if (state.positions.any { it.container == "home" } || state.workspaceKeys("home").size > prefs.columns * prefs.rows || selected.size < state.homeApps.size) {
             val dockInset = if (state.prefs.dock.enabled) (56 * state.prefs.dock.iconScale + 12).dp else 0.dp
             PositionedWorkspace("home", state, apps, repository, prefs, badges, actions,
                 Modifier.weight(1f).fillMaxWidth().padding(
@@ -151,7 +153,7 @@ fun HomeScreen(
                         Modifier.height(rowHeight).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
                             val user = app?.user ?: context.getSystemService(android.os.UserManager::class.java)
                                 ?.getUserForSerialNumber(shortcut.userSerial)
-                            if (user != null) repository.launchShortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
+                            if (user != null) actions.shortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
                             else android.widget.Toast.makeText(context, "This shortcut's profile is unavailable", android.widget.Toast.LENGTH_SHORT).show()
                         }, onLongClick = { actions.update { current ->
                             if (current.prefs.home.preventChanges) current else current.copy(shortcuts = current.shortcuts - shortcut)
@@ -235,7 +237,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().padding(start = 12.dp, top = 16.dp, bottom = 28.dp)) {
         if (prefs.analog) {
             // Analog clock rendering
-            Box(Modifier.size(110.dp).clickable(onClick = onClockClick).align(Alignment.Start), contentAlignment = Alignment.Center) {
+            Box(Modifier.size((110 * prefs.size / 52f * textScale).dp).clickable(onClick = onClockClick).align(Alignment.Start), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxSize()) {
                     val radius = size.minDimension / 2f - 4f
                     val center = Offset(size.width / 2f, size.height / 2f)
@@ -290,6 +292,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                 }
             }
 
+        }
             if (prefs.showDate) {
                 Text(
                     text = now.format(DateTimeFormatter.ofPattern(
@@ -301,7 +304,6 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                     modifier = Modifier.clickable { onClockClick() }
                 )
             }
-        }
     }
 }
 
@@ -321,15 +323,19 @@ fun AppDrawer(
 ) {
     var filter by rememberSaveable { mutableStateOf("") }
     val prefs = state.prefs.drawer
+    val activeFilter = if (Screen.APPS in state.prefs.search.barScreens) filter else ""
+    LaunchedEffect(state.prefs.search.barScreens) {
+        if (Screen.APPS !in state.prefs.search.barScreens) filter = ""
+    }
     val locale = LocalConfiguration.current.locales[0]
     val collator = remember(locale) { Collator.getInstance(locale) }
     val sortedApps = remember(apps, state.hiddenApps, state.overrides, collator) {
         apps.filter { it.key !in state.hiddenApps }
             .sortedWith { a, b -> collator.compare(state.overrides[a.key]?.label?.ifBlank { a.label } ?: a.label, state.overrides[b.key]?.label?.ifBlank { b.label } ?: b.label) }
     }
-    val rows = remember(sortedApps, state.overrides, filter) {
+    val rows = remember(sortedApps, state.overrides, activeFilter) {
         val grouped = sortedApps.filter {
-            (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(filter, true)
+            (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(activeFilter, true)
         }.groupBy { app ->
             val first = (state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label).firstOrNull()?.uppercaseChar()
             when {
@@ -359,12 +365,14 @@ fun AppDrawer(
     val showSearchBar = Screen.APPS in state.prefs.search.barScreens
     val searchField = @Composable {
         Box(Modifier.padding(end = 10.dp, top = 8.dp, bottom = 8.dp)) {
-            LauncherSearchField(filter, { filter = it }, state.prefs.search.barText, {},
+            LauncherSearchField(filter, { filter = it }, state.prefs.search.barText, {
+                rows.filterIsInstance<DrawerRow.App>().firstOrNull()?.app?.let(actions.launch)
+            },
                 onVoice.takeIf { state.prefs.search.voice }, state.prefs.appearance.search)
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(start = prefs.padding.dp, end = 2.dp)) {
+    Column(Modifier.fillMaxSize().padding(start = prefs.borderPaddingDp.dp, end = 2.dp)) {
         if (showSearchBar && !state.prefs.search.barAtBottom) searchField()
         if (rows.isEmpty()) EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
         else Row(Modifier.weight(1f)) {
@@ -439,12 +447,17 @@ fun AppDrawer(
 @Composable
 fun AppListRow(app: AppEntry, repository: AppsRepository, state: LauncherState, onClick: () -> Unit, onLongClick: () -> Unit,
     prefs: GridPrefs = state.prefs.drawer, draggable: Boolean = false, dragArea: LayoutArea? = null) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick)
+    val label = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label
+    val badges by LauncherNotificationService.counts.collectAsStateWithLifecycle()
+    Row(Modifier.fillMaxWidth().semantics { contentDescription = label }.clip(RoundedCornerShape(15.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick)
         .padding(vertical = 10.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         AppIcon(app, repository, state, (40 * prefs.iconScale).toInt())
-        if (prefs.labels) Text(state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label, modifier = Modifier.padding(start = 15.dp).weight(1f), fontSize = 14.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (prefs.labels) Text(label, modifier = Modifier.padding(start = 15.dp).weight(1f), fontSize = (14 * prefs.textScale).sp,
+            maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis)
         else Spacer(Modifier.weight(1f))
+        if (state.prefs.badges.enabled && (badges[app.badgeKey] ?: 0) > 0) Badge {
+            Text(if (badgeCounts(state.prefs)) "${badges[app.badgeKey]}" else "•")
+        }
         Icon(Icons.Rounded.NorthEast, null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -465,7 +478,7 @@ fun FavoritesScreen(
         addAll(state.hiddenApps)
         addAll(prefs.excluded)
         if (prefs.excludeDock) addAll(state.dockApps.filterNot { it in state.favoriteApps })
-        if (prefs.excludeFolders) state.folders.forEach { folder -> addAll(folder.apps.filterNot { it in state.favoriteApps }) }
+        if (prefs.excludeFolders) state.folders.filter { it.id in state.dockFolders }.forEach { folder -> addAll(folder.apps.filterNot { it in state.favoriteApps }) }
     }
     val favorites = remember(state.favoriteApps, state.launches, apps, prefs, usage, excluded) {
         val baseList = if (prefs.byUsage) {
@@ -498,10 +511,10 @@ fun FavoritesScreen(
         } else emptyList()
     }
     var picker by remember { mutableStateOf(false) }
-    val columns = if (prefs.itemsPerRow > 0) prefs.itemsPerRow else 4
+    val columns = if (prefs.grid.listMode) 1 else if (prefs.itemsPerRow > 0) prefs.itemsPerRow else 4
     val showSearchBar = Screen.FAVORITES in state.prefs.search.barScreens
 
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = prefs.grid.padding.dp)) {
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = prefs.grid.borderPaddingDp.dp)) {
         if (showSearchBar && !state.prefs.search.barAtBottom) {
             item {
                 Spacer(Modifier.height(8.dp))
@@ -521,8 +534,11 @@ fun FavoritesScreen(
         if (favorites.isEmpty()) item { EmptyCard(Icons.Rounded.StarOutline, "Your favorites find you", "Open apps to see your most used here, or long-press any app to pin it.", "Browse applications", { actions.navigate(Screen.APPS) }) }
         else items(favorites.chunked(columns)) { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
-                row.forEach { app -> AppTile(app, repository, state, prefs.grid.copy(multiline = false), badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f),
-                    draggable = true, dragArea = LayoutArea.FAVORITES) }
+                row.forEach { app ->
+                    if (prefs.grid.listMode) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs.grid, true, LayoutArea.FAVORITES)
+                    else AppTile(app, repository, state, prefs.grid, badges[app.badgeKey] ?: 0, { actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f),
+                        draggable = true, dragArea = LayoutArea.FAVORITES)
+                }
                 repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }

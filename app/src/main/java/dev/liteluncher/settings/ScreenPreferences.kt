@@ -22,7 +22,7 @@ import dev.liteluncher.platform.AppEntry
 import dev.liteluncher.ui.ClockHeader
 
 @Composable
-internal fun LayoutPreferences(value: GridPrefs, onChange: ((GridPrefs) -> GridPrefs) -> Unit) {
+internal fun LayoutPreferences(value: GridPrefs, showList: Boolean = true, onChange: ((GridPrefs) -> GridPrefs) -> Unit) {
     val dotColor = MaterialTheme.colorScheme.primary
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -37,9 +37,9 @@ internal fun LayoutPreferences(value: GridPrefs, onChange: ((GridPrefs) -> GridP
             } }
         }
     }
-    IntSetting("Intermediate steps", value.intermediateSteps, 0..4) { next -> onChange { it.copy(intermediateSteps = next) } }
     ChoiceSetting("Border padding", value.borderPadding, listOf("Default", "None", "Small", "Large").map { it to it }) { next -> onChange { it.copy(borderPadding = next) } }
     ToggleSetting("Prevent changes", value.preventChanges) { next -> onChange { it.copy(preventChanges = next) } }
+    if (showList) ToggleSetting("List layout", value.listMode) { next -> onChange { it.copy(listMode = next) } }
 }
 
 @Composable
@@ -52,10 +52,6 @@ internal fun IconPreferences(value: GridPrefs, onChange: ((GridPrefs) -> GridPre
 
 internal fun LazyListScope.homePreferences(p: LauncherPrefs, apps: List<AppEntry>, update: ((LauncherPrefs) -> LauncherPrefs) -> Unit) {
     item { SettingsSection("Layout") { LayoutPreferences(p.home) { change -> update { it.copy(home = change(it.home)) } } } }
-    item { SettingsSection("Widgets") {
-        ToggleSetting("Rounded widget corners", p.desktop.rounded) { v -> update { it.copy(desktop = it.desktop.copy(rounded = v)) } }
-        IntSetting("Corner radius", p.desktop.cornerRadius, 0..48) { v -> update { it.copy(desktop = it.desktop.copy(cornerRadius = v)) } }
-    } }
     item { SettingsSection("Icons") { IconPreferences(p.home) { change -> update { it.copy(home = change(it.home)) } } } }
     item { SettingsSection("Date & Time") {
         ClockHeader(p.clock)
@@ -90,12 +86,14 @@ internal fun LazyListScope.dockPreferences(p: LauncherPrefs, update: ((LauncherP
 internal fun LazyListScope.desktopPreferences(p: LauncherPrefs, update: ((LauncherPrefs) -> LauncherPrefs) -> Unit) {
     item { SettingsSection("Layout") {
         val d = p.desktop
-        LayoutPreferences(d.grid.copy(columns = d.columns, rows = d.rows, preventChanges = d.preventChanges)) { change -> update {
+        LayoutPreferences(d.grid.copy(columns = d.columns, rows = d.rows, preventChanges = d.preventChanges), showList = false) { change -> update {
             val grid = change(it.desktop.grid.copy(columns = it.desktop.columns, rows = it.desktop.rows, preventChanges = it.desktop.preventChanges))
             it.copy(desktop = it.desktop.copy(grid = grid, columns = grid.columns, rows = grid.rows, preventChanges = grid.preventChanges))
         } }
         ToggleSetting("Hint on empty screen", d.hint) { v -> update { it.copy(desktop = it.desktop.copy(hint = v)) } }
         ToggleSetting("Widget padding", d.widgetPadding) { v -> update { it.copy(desktop = it.desktop.copy(widgetPadding = v)) } }
+        ToggleSetting("Rounded widget corners", d.rounded) { v -> update { it.copy(desktop = it.desktop.copy(rounded = v)) } }
+        IntSetting("Corner radius", d.cornerRadius, 0..48) { v -> update { it.copy(desktop = it.desktop.copy(cornerRadius = v)) } }
     } }
 }
 
@@ -110,8 +108,9 @@ internal fun LazyListScope.favoritePreferences(state: LauncherState, apps: List<
         ChoiceSetting("Items per row", f.itemsPerRow, listOf(0 to "Automatic") + (1..10).map { it to "$it" }) { v -> update { it.copy(favorites = it.favorites.copy(itemsPerRow = v)) } }
         ChoiceSetting("Sorting", f.byUsage, listOf(true to "By usage", false to "Alphabetical")) { v -> update { it.copy(favorites = it.favorites.copy(byUsage = v)) } }
         ToggleSetting("Reverse Sorting", f.reverse) { v -> update { it.copy(favorites = it.favorites.copy(reverse = v)) } }
+        ToggleSetting("List layout", f.grid.listMode) { v -> update { it.copy(favorites = it.favorites.copy(grid = it.favorites.grid.copy(listMode = v))) } }
         AppBlacklist("Excluded Entries", apps, f.excluded) { key -> update { it.copy(favorites = it.favorites.copy(excluded = if (key in it.favorites.excluded) it.favorites.excluded - key else it.favorites.excluded + key)) } }
-        TextButton(onClick = { write { it.copy(favoriteApps = emptyList(), launches = emptyMap(), prefs = it.prefs.copy(favorites = FavoritesPrefs())) } }) { Text("Reset Favorites") }
+        TextButton(onClick = { write { it.copy(favoriteApps = emptyList(), contacts = emptyList(), launches = emptyMap(), prefs = it.prefs.copy(favorites = FavoritesPrefs())) } }) { Text("Reset Favorites") }
         SettingsLink("App usage access", "Use Android usage statistics", usage)
         SettingsLink("Allow contacts", "Grant contact access", contacts)
     } }
@@ -162,6 +161,7 @@ internal fun LazyListScope.searchPreferences(state: LauncherState, update: ((Lau
         ToggleSetting("Hint on empty screen", s.hint) { v -> update { it.copy(search = it.search.copy(hint = v)) } }
         ToggleSetting("Voice Search", s.voice) { v -> update { it.copy(search = it.search.copy(voice = v)) } }
         ToggleSetting("Show search history", s.history) { v -> update { it.copy(search = it.search.copy(history = v)) } }
+        ToggleSetting("List layout", s.grid.listMode) { v -> update { it.copy(search = it.search.copy(grid = it.search.grid.copy(listMode = v))) } }
         TextButton(onClick = { write { it.copy(history = emptyList()) } }) { Text("Clear search history") }
     } }
 }
@@ -188,6 +188,12 @@ private fun SearchTargetsSetting(prefs: SearchPrefs, update: ((SearchPrefs) -> S
             Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(prefs.checked(target), { v -> update { it.check(target, v) } })
                 Text(target.title, Modifier.weight(1f))
+                TextButton(enabled = prefs.targetOrder.first() != target, onClick = {
+                    update { it.copy(targetOrder = it.targetOrder.moveLayoutItem(it.targetOrder.indexOf(target), it.targetOrder.indexOf(target) - 1)) }
+                }) { Text("↑") }
+                TextButton(enabled = prefs.targetOrder.last() != target, onClick = {
+                    update { it.copy(targetOrder = it.targetOrder.moveLayoutItem(it.targetOrder.indexOf(target), it.targetOrder.indexOf(target) + 1)) }
+                }) { Text("↓") }
                 Icon(Icons.Rounded.DragHandle, "Drag to reorder ${target.title}", Modifier.size(40.dp).pointerInput(target) {
                     var distance = 0f
                     detectDragGesturesAfterLongPress(onDragStart = { distance = 0f }, onDrag = { change, delta ->

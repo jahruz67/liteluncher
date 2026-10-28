@@ -13,6 +13,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.border
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.clickable
@@ -40,6 +42,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
@@ -58,6 +61,7 @@ import dev.liteluncher.settings.SettingsScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -76,7 +80,8 @@ data class WorkspaceActions(
     val dockMenu: (AppEntry) -> Unit = menu,
     val folderMenu: (AppEntry) -> Unit = menu,
     val editFolder: (FolderItem) -> Unit = {},
-    val folderActions: (FolderItem) -> Unit = editFolder
+    val folderActions: (FolderItem) -> Unit = editFolder,
+    val shortcut: (NativeShortcut) -> Boolean = { false }
 )
 
 @Composable
@@ -95,15 +100,21 @@ fun LauncherApp(
     val view = LocalView.current
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    val accessibility = LocalAccessibilityManager.current
+    val systemDark = isSystemInDarkTheme()
+    val darkTheme = when (state.prefs.appearance.mode) { ThemeMode.LIGHT -> false; ThemeMode.SYSTEM -> systemDark; else -> true }
     val manager = rememberSaveable(saver = ScreenManager.stateSaver) { ScreenManager() }
     var panel by rememberSaveable { mutableStateOf("") }
     var screenManagerReturn by rememberSaveable { mutableStateOf("") }
     var appMenu by remember { mutableStateOf<AppEntry?>(null) }
     var appMenuScreen by remember { mutableStateOf(Screen.HOME) }
     var appMenuFromDock by remember { mutableStateOf(false) }
-    var editApp by remember { mutableStateOf<AppEntry?>(null) }
+    var appMenuDesktopPage by remember { mutableIntStateOf(0) }
+    var editAppKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val editApp = apps.find { it.key == editAppKey }
     var folder by remember { mutableStateOf<FolderItem?>(null) }
-    var editingFolder by remember { mutableStateOf<FolderItem?>(null) }
+    var editingFolderId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editingFolder = state.folders.find { it.id == editingFolderId }
     var folderMenu by remember { mutableStateOf<FolderItem?>(null) }
     var folderFromDock by remember { mutableStateOf(false) }
     var emptyMenu by remember { mutableStateOf(false) }
@@ -118,6 +129,9 @@ fun LauncherApp(
     var undoSignal by remember { mutableIntStateOf(0) }
     var lastDeletedWidget by remember { mutableStateOf<WidgetItem?>(null) }
     var lastDeletedAppKey by remember { mutableStateOf<Triple<LayoutArea, String, Int>?>(null) }
+    var lastDeletedPosition by remember { mutableStateOf<ItemPosition?>(null) }
+    var undoInProgress by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     // Multi-page desktop support
     var currentDesktopPage by rememberSaveable { mutableIntStateOf(0) }
@@ -130,6 +144,7 @@ fun LauncherApp(
             if (query.isNotBlank()) model.store.addHistory(query)
             query = ""
             folder = null
+            if (state.prefs.behavior.returnHome) manager.navigate(Screen.HOME, state.prefs.navigation)
         } else toast("This app is unavailable in the current profile")
     }
     val navigate: (Screen) -> Unit = { screen ->
@@ -140,7 +155,17 @@ fun LauncherApp(
         manager.navigate(screen, state.prefs.navigation)
         folder = null
         folderMenu = null
-        editingFolder = null
+        editingFolderId = null
+    }
+    val launchShortcut: (NativeShortcut) -> Boolean = { shortcut ->
+        val launched = model.apps.launchShortcut(shortcut)
+        if (launched) {
+            if (query.isNotBlank()) model.store.addHistory(query)
+            query = ""
+            folder = null
+            if (state.prefs.behavior.returnHome) navigate(Screen.HOME)
+        }
+        launched
     }
 
     fun perform(binding: GestureBinding) {
@@ -155,29 +180,30 @@ fun LauncherApp(
             Action.SETTINGS -> panel = "settings"
             Action.SCREEN_MANAGER -> { screenManagerReturn = panel; panel = "screens" }
             Action.WALLPAPER -> SystemActions.wallpaper(activity)
-            Action.NOTIFICATIONS -> SystemActions.notificationAccess(context)
+            Action.NOTIFICATIONS -> SystemActions.notifications(context)
             Action.APP -> apps.find { it.key == binding.target }?.let(launch) ?: toast("Choose an available app for this gesture")
             Action.SHORTCUT -> {
                 val component = android.content.ComponentName.unflattenFromString(binding.target.substringBeforeLast('|'))
                 val serial = binding.target.substringAfterLast('|').toLongOrNull()
                 val users = context.getSystemService(UserManager::class.java)
                 val user = serial?.let { users?.getUserForSerialNumber(it) }
-                if (component == null || user == null || !model.apps.launchShortcut(NativeShortcut(binding.shortcutId, component.packageName, "Shortcut", user))) toast("The shortcut is no longer available")
+                if (component == null || user == null || !launchShortcut(NativeShortcut(binding.shortcutId, component.packageName, "Shortcut", user))) toast("The shortcut is no longer available")
             }
         }
     }
 
     val actions = WorkspaceActions(
-        launch = launch, menu = { appMenuScreen = manager.current; appMenuFromDock = false; appMenu = it }, navigate = navigate, settings = { panel = "settings" },
+        launch = launch, menu = { appMenuScreen = manager.current; appMenuDesktopPage = currentDesktopPage; appMenuFromDock = false; appMenu = it }, navigate = navigate, settings = { panel = "settings" },
         manageScreens = { screenManagerReturn = panel; panel = "screens" }, manageLayout = { panel = "layout" }, widgets = {
-            if (state.prefs.desktop.preventChanges) toast("Desktop is locked")
+            if (Screen.DESKTOP !in state.prefs.navigation.enabledScreens) toast("Enable Desktop in Manage screens first")
+            else if (state.prefs.desktop.preventChanges) toast("Desktop is locked")
             else { navigate(Screen.DESKTOP); widgetPicker = true }
         },
         folder = { item, dock -> folder = item; folderFromDock = dock }, requestContacts = onContacts, update = model.store::update,
         dockMenu = { appMenuFromDock = true; appMenuScreen = manager.current; appMenu = it },
         folderMenu = { appMenuFromDock = false; appMenuScreen = Screen.APPS; appMenu = it },
-        editFolder = { editingFolder = it },
-        folderActions = { folderMenu = it }
+        editFolder = { editingFolderId = it.id },
+        folderActions = { folderMenu = it }, shortcut = launchShortcut
     )
 
     fun finishWidgetRemoval() {
@@ -189,6 +215,9 @@ fun LauncherApp(
     val removeEntry: (String, LayoutArea) -> Unit = { key, area ->
         if (state.layoutLocked(area)) toast("${area.title} is locked") else {
             lastDeletedAppKey = Triple(area, key, state.layoutApps(area).indexOf(key))
+            lastDeletedPosition = if (area == LayoutArea.FAVORITES) null else state.workspacePositions(
+                if (area == LayoutArea.HOME) "home" else "dock", if (area == LayoutArea.HOME) state.prefs.home.columns else 1,
+                if (area == LayoutArea.HOME) state.prefs.home.rows else MAX_LAYOUT_APPS).find { it.key == key }
             finishWidgetRemoval()
             model.store.update { removeLayoutApp(it, area, key) }
             snackbarMessage = "Entry removed"
@@ -197,39 +226,61 @@ fun LauncherApp(
         }
     }
     val undoRemoval: () -> Unit = undo@{
+        if (undoInProgress) return@undo
         val deletedWidget = lastDeletedWidget
-        if (deletedWidget != null) widgets.cancelRemoval(deletedWidget.id)
-        if (deletedWidget != null) model.store.update { current ->
-            if (current.widgets.any { it.id == deletedWidget.id }) current else current.copy(widgets = current.widgets + deletedWidget)
-        }
         val removedApp = lastDeletedAppKey
-        if (removedApp != null) {
-            val (area, key, index) = removedApp
-            val result = restoreLayoutApp(state, area, key, index)
-            if (result.error != null) {
-                toast(result.error)
-                return@undo
-            }
-            model.store.update { restoreLayoutApp(it, area, key, index).state }
+        val position = lastDeletedPosition
+        undoInProgress = true
+        scope.launch {
+            try {
+                model.store.updateAndAwait { current ->
+                    when {
+                        deletedWidget != null -> {
+                            require(!current.prefs.desktop.preventChanges) { "Desktop is locked" }
+                            require(deletedWidget.page in 0 until current.prefs.desktop.pageCount && WidgetGrid.fits(deletedWidget,
+                                current.widgets + current.desktopObstacles(), current.prefs.desktop.columns, current.prefs.desktop.rows)) {
+                                "Free the widget's original space before undoing"
+                            }
+                            if (current.widgets.any { it.id == deletedWidget.id }) current else current.copy(widgets = current.widgets + deletedWidget)
+                        }
+                        removedApp != null -> {
+                            val result = restoreLayoutApp(current, removedApp.first, removedApp.second, removedApp.third, position)
+                            require(result.error == null) { result.error.orEmpty() }
+                            result.state
+                        }
+                        else -> current
+                    }
+                }.onSuccess {
+                    deletedWidget?.let { widgets.cancelRemoval(it.id) }
+                    lastDeletedWidget = null
+                    lastDeletedAppKey = null
+                    snackbarVisible = false
+                }.onFailure { toast(it.message ?: "The entry could not be restored") }
+            } finally { undoInProgress = false }
         }
-        lastDeletedWidget = null
-        lastDeletedAppKey = null
-        snackbarVisible = false
     }
     val onAppDrop: (DraggedApp, AppDropTarget) -> Unit = { item, target ->
         fun place(current: LauncherState): LayoutEditResult {
             if (item.movingFolderId != null) return applyFolderDrop(current, item.movingFolderId, item.source, target)
+            if (item.desktopPage != null && current.prefs.desktop.preventChanges) return LayoutEditResult(current, "Desktop is locked")
             if (target is AppDropTarget.Area) {
                 if (target.area == LayoutArea.DOCK && !current.prefs.dock.enabled && item.source != LayoutArea.DOCK)
                     return LayoutEditResult(current, "Enable Dock in Settings before dropping apps there")
                 if (target.area == LayoutArea.FAVORITES && Screen.FAVORITES !in current.prefs.navigation.enabledScreens && item.source != LayoutArea.FAVORITES)
                     return LayoutEditResult(current, "Enable the Favorites screen before dropping apps there")
             }
-            return applyAppDrop(current, item.app.key, item.source, target, item.folderId)
+            val result = if (target == AppDropTarget.Remove && item.desktopPage != null) LayoutEditResult(current)
+                else applyAppDrop(current, item.app.key, item.source, target, item.folderId)
+            val keepDesktop = target is AppDropTarget.Area && target.area == LayoutArea.FAVORITES ||
+                target is AppDropTarget.DesktopCell && target.page == item.desktopPage
+            return if (result.error != null || item.desktopPage == null || keepDesktop) result else result.copy(state = result.state.copy(
+                desktopApps = result.state.desktopApps.mapValues { (page, keys) -> if (page == item.desktopPage) keys - item.app.key else keys },
+                positions = result.state.positions.filterNot { it.container == "desktop:${item.desktopPage}" && it.key == item.app.key }
+            ))
         }
         val result = place(state)
         when {
-            apps.none { it.key == item.app.key } -> toast("This app is no longer available")
+            item.movingFolderId == null && apps.none { it.key == item.app.key } -> toast("This app is no longer available")
             result.error != null -> toast(result.error)
             target == AppDropTarget.Remove && item.source != null && item.movingFolderId == null -> removeEntry(item.app.key, item.source)
             else -> {
@@ -239,6 +290,7 @@ fun LauncherApp(
                     is AppDropTarget.CreateFolder -> target.area
                     is AppDropTarget.Folder -> if (target.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
                     AppDropTarget.Remove -> null
+                    is AppDropTarget.DesktopCell -> null
                 }
                 if (item.source == null && panel.isEmpty() && targetArea != null &&
                     (target !is AppDropTarget.Folder || target.id != item.folderId)) {
@@ -253,7 +305,12 @@ fun LauncherApp(
     }
     val latestDrop by rememberUpdatedState(onAppDrop)
     val drag = remember { AppDragController(onDragStart = { appMenu = null; folderMenu = null }) { item, target -> latestDrop(item, target) } }
-    LaunchedEffect(panel) { drag.cancel() }
+    var previousPanel by remember { mutableStateOf(panel) }
+    LaunchedEffect(panel) {
+        drag.cancel()
+        if (previousPanel.isNotEmpty() && panel.isEmpty() && state.prefs.behavior.returnHome) navigate(Screen.HOME)
+        previousPanel = panel
+    }
 
     LaunchedEffect(ready, apps) {
         if (ready && apps.isNotEmpty() && !state.initialized) model.store.update { current ->
@@ -282,14 +339,15 @@ fun LauncherApp(
     }
     LaunchedEffect(homeSignal) {
         if (homeSignal > 0) {
+            val dismissing = panel.isNotEmpty() || appMenu != null || editApp != null || folder != null || emptyMenu || widgetPicker || folderMenu != null || editingFolder != null
             drag.cancel()
-            panel = ""; appMenu = null; editApp = null; folder = null; emptyMenu = false; widgetPicker = false
-            folderMenu = null; editingFolder = null
+            panel = ""; appMenu = null; editAppKey = null; folder = null; emptyMenu = false; widgetPicker = false
+            folderMenu = null; editingFolderId = null
             query = ""
             focusManager.clearFocus(force = true)
             keyboard?.hide()
             if (manager.current != Screen.HOME) navigate(Screen.HOME)
-            else perform(state.prefs.gestures[Gesture.HOME] ?: GestureBinding(Action.HOME))
+            else if (!dismissing) perform(state.prefs.gestures[Gesture.HOME] ?: GestureBinding(Action.HOME))
         }
     }
     LaunchedEffect(voiceQuery) {
@@ -298,26 +356,40 @@ fun LauncherApp(
     LaunchedEffect(state.prefs.navigation.enabledScreens) {
         if (manager.current !in state.prefs.navigation.enabledScreens) navigate(Screen.HOME)
     }
-    LaunchedEffect(state.prefs.desktop.pageCount) {
-        currentDesktopPage = currentDesktopPage.coerceIn(0, state.prefs.desktop.pageCount.coerceAtLeast(1) - 1)
+    LaunchedEffect(ready, state.prefs.desktop.pageCount) {
+        if (ready) currentDesktopPage = currentDesktopPage.coerceIn(0, state.prefs.desktop.pageCount.coerceAtLeast(1) - 1)
     }
     // Auto-dismiss deletion snackbar after 4 seconds
-    LaunchedEffect(snackbarVisible, undoSignal) {
-        if (snackbarVisible) {
-            delay(4000)
+    LaunchedEffect(snackbarVisible, undoSignal, undoInProgress) {
+        if (snackbarVisible && !undoInProgress) {
+            delay(accessibility?.calculateRecommendedTimeoutMillis(4000L, containsText = true, containsControls = true) ?: 4000L)
             finishWidgetRemoval()
             lastDeletedAppKey = null
             snackbarVisible = false
         }
     }
 
-    LaunchedEffect(widgets, ready, state.prefs.desktop, state.widgets, currentDesktopPage) {
-        if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets, currentDesktopPage)
+    LaunchedEffect(widgets, ready, state, currentDesktopPage) {
+        if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets, currentDesktopPage, state.desktopObstacles())
     }
-    LaunchedEffect(activity, view, state.prefs.appearance.lightStatusIcons, state.prefs.appearance.lightNavigationIcons, state.prefs.behavior.showStatusBar) {
+    LaunchedEffect(ready, state.shortcuts) {
+        if (ready) withContext(Dispatchers.IO) { model.apps.syncShortcutPins(state.shortcuts) }
+    }
+    LaunchedEffect(ready, state.overrides, state.folders) {
+        if (ready) withContext(Dispatchers.IO) {
+            val used = state.overrides.values.map { it.iconUri }.toSet() + state.folders.map { it.iconUri }
+            context.contentResolver.persistedUriPermissions.filter { it.uri.toString() !in used }.forEach { permission ->
+                runCatching { context.contentResolver.releasePersistableUriPermission(permission.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            }
+        }
+    }
+    LaunchedEffect(activity, view, state.prefs.appearance, darkTheme, state.prefs.behavior.showStatusBar) {
         val controller = WindowCompat.getInsetsController(activity.window, view)
-        controller.isAppearanceLightStatusBars = !state.prefs.appearance.lightStatusIcons
-        controller.isAppearanceLightNavigationBars = !state.prefs.appearance.lightNavigationIcons
+        val appearance = state.prefs.appearance
+        controller.isAppearanceLightStatusBars = when (appearance.statusIcons) { "Always dark" -> true; "Always light" -> false; else -> !darkTheme }
+        controller.isAppearanceLightNavigationBars = when (appearance.navigationIcons) { "Always dark" -> true; "Always light" -> false; else -> !darkTheme }
+        activity.window.statusBarColor = if (appearance.customBarColor) android.graphics.Color.parseColor(appearance.statusColor) else android.graphics.Color.TRANSPARENT
+        activity.window.navigationBarColor = if (appearance.customBarColor) android.graphics.Color.parseColor(appearance.navigationColor) else android.graphics.Color.TRANSPARENT
         if (state.prefs.behavior.showStatusBar) controller.show(WindowInsetsCompat.Type.statusBars())
         else controller.hide(WindowInsetsCompat.Type.statusBars())
         controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -329,7 +401,7 @@ fun LauncherApp(
         if (activity.requestedOrientation != requested) activity.requestedOrientation = requested
     }
     val wallpaperOffsets = when (state.prefs.behavior.wallpaperScroll) {
-        "Off" -> .5f to .5f
+        "Off" -> (when (state.prefs.behavior.wallpaperAlignment) { "Left" -> 0f; "Right" -> 1f; else -> .5f }) to .5f
         "Horizontal" -> (.5f + manager.current.x * .5f) to .5f
         else -> (.5f + manager.current.x * .5f) to (.5f + manager.current.y * .5f)
     }
@@ -441,7 +513,7 @@ fun LauncherApp(
                     }
                     val swipeWithPager = state.prefs.navigation.fingers == 1 && !state.prefs.navigation.infinite && horizontalPaging &&
                         listOf(Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT).all {
-                            state.prefs.gestures[it]?.action in listOf(null, Action.NONE, Action.NAVIGATE)
+                            state.prefs.gestures[it]?.action == Action.NAVIGATE
                         }
                     BackHandler(enabled = horizontalPaging && pager.isScrollInProgress && manager.current in horizontalScreens && folder == null) {
                         navigate(Screen.HOME)
@@ -466,7 +538,7 @@ fun LauncherApp(
                                 Direction.RIGHT -> if (fingers >= 2) Gesture.TWO_RIGHT else Gesture.SWIPE_RIGHT
                             }
                             val binding = state.prefs.gestures[gesture] ?: GestureBinding()
-                            if (binding.action == Action.NONE || binding.action == Action.NAVIGATE) manager.swipe(direction, state.prefs.navigation)
+                            if (binding.action == Action.NAVIGATE) manager.swipe(direction, state.prefs.navigation)
                             else perform(binding)
                             folder = null
                         },
@@ -479,7 +551,8 @@ fun LauncherApp(
 
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
                             // Clip each workspace page while it moves through the pager.
-                            Box(Modifier.fillMaxSize().graphicsLayer { clip = true }) {
+                            Box(Modifier.fillMaxSize().graphicsLayer { clip = true }
+                                .then(if (state.prefs.behavior.borders && pager.isScrollInProgress) Modifier.border(1.dp, MaterialTheme.colorScheme.outline) else Modifier)) {
                                 when (screen) {
                                     Screen.HOME -> HomeScreen(
                                         state = state,
@@ -523,7 +596,7 @@ fun LauncherApp(
                                     )
                                     Screen.DESKTOP -> Box(Modifier.fillMaxSize().combinedClickable(onClick = {}, onLongClick = actions.widgets)) {
                                         val pageWidgets = state.widgets.filter { it.page == currentDesktopPage }
-                                        Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+                                        Column(Modifier.fillMaxSize()) {
                                             // Multi-page desktop pagination header
                                             val pageCount = state.prefs.desktop.pageCount
                                             if (pageCount > 1) {
@@ -545,10 +618,13 @@ fun LauncherApp(
                                                 prefs = state.prefs.desktop,
                                                 widgets = pageWidgets,
                                                 onChange = { list ->
-                                                    model.store.update { it.copy(widgets = mergeWidgetEdits(it.widgets, pageWidgets, list)) }
+                                                    model.store.update { current ->
+                                                        if (current.prefs.desktop.preventChanges) current else current.copy(widgets = mergeWidgetEdits(current.widgets, pageWidgets, list))
+                                                    }
                                                 },
                                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                                                 onCanvasBounds = { desktopBounds = it },
+                                                blocked = state.desktopObstacles().filter { it.page == currentDesktopPage },
                                                 overlay = {
                                                     val grid = state.prefs.desktop.grid.copy(columns = state.prefs.desktop.columns, rows = state.prefs.desktop.rows)
                                                     PositionedWorkspace("desktop:$currentDesktopPage", state, apps, model.apps, grid, badges, actions, Modifier.fillMaxSize())
@@ -558,7 +634,7 @@ fun LauncherApp(
                                                         key(item.key) {
                                                             PendingWidgetTile(item, widgets, Modifier.offset(x = cellWidth * item.column, y = cellHeight * item.row)
                                                                 .width(cellWidth * item.columns).height(cellHeight * item.rows)) {
-                                                                model.store.update { current -> current.copy(pendingWidgets = current.pendingWidgets.filterNot { it.key == item.key }) }
+                                                                model.store.update { current -> if (current.prefs.desktop.preventChanges) current else current.copy(pendingWidgets = current.pendingWidgets.filterNot { it.key == item.key }) }
                                                             }
                                                         }
                                                     }
@@ -625,9 +701,10 @@ fun LauncherApp(
                                         Box(Modifier.align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
                                             .graphicsLayer {
                                                 // Follow the finger without rebuilding the dock as it leaves or returns.
-                                                translationX = size.width * dockHideProgress * if (left) -1f else 1f
+                                                val progress = if (state.prefs.dock.showWhenScrolling && pager.isScrollInProgress) 0f else dockHideProgress
+                                                translationX = size.width * progress * if (left) -1f else 1f
                                             }) {
-                                            FloatingDock(state, apps, model.apps, badges, actions)
+                                            FloatingDock(state, apps, model.apps, badges, actions, pager.isScrollInProgress)
                                         }
                                     }
                                 }
@@ -657,8 +734,11 @@ fun LauncherApp(
                 folderMenu?.let { selected ->
                     FolderContextMenu(selected, drag.menuAnchor, state.folderLocked(selected.id), {
                         folderMenu = null
-                        editingFolder = selected
-                    }, { folderMenu = null })
+                        editingFolderId = selected.id
+                    }, { folderMenu = null }, onRemove = {
+                        model.store.update { applyFolderDrop(it, selected.id, null, AppDropTarget.Remove).state }
+                        folderMenu = null
+                    })
                 }
                 editingFolder?.let { selected ->
                     FolderEditor(selected, apps, { edited ->
@@ -667,8 +747,8 @@ fun LauncherApp(
                                 if (it.id == edited.id) it.copy(name = edited.name, apps = edited.apps) else it
                             })
                         }
-                        editingFolder = null
-                    }, { editingFolder = null })
+                        editingFolderId = null
+                    }, { editingFolderId = null }, state.overrides)
                 }
                 DeletionSnackbar(snackbarVisible, snackbarMessage, undoRemoval, Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
                 AppDragOverlay(drag, state, model.apps)
@@ -689,14 +769,19 @@ fun LauncherApp(
                     state = state,
                     repository = model.apps,
                     actions = actions,
-                    onEdit = { editApp = appMenu; appMenu = null },
+                    onEdit = { editAppKey = appMenu?.key; appMenu = null },
                     onDismiss = { appMenu = null },
                     source = appMenuScreen,
                     fromDock = appMenuFromDock,
                     onRemove = {
                         val key = appMenu!!.key
-                        val area = if (appMenuFromDock) LayoutArea.DOCK else if (appMenuScreen == Screen.FAVORITES) LayoutArea.FAVORITES else LayoutArea.HOME
-                        removeEntry(key, area)
+                        val desktopPage = appMenuDesktopPage
+                        if (appMenuScreen == Screen.DESKTOP && !appMenuFromDock) model.store.update { current ->
+                            if (current.prefs.desktop.preventChanges) current else current.copy(desktopApps = current.desktopApps.mapValues { (page, keys) -> if (page == desktopPage) keys - key else keys })
+                        } else {
+                            val area = if (appMenuFromDock) LayoutArea.DOCK else if (appMenuScreen == Screen.FAVORITES) LayoutArea.FAVORITES else LayoutArea.HOME
+                            removeEntry(key, area)
+                        }
                         appMenu = null
                     }
                 )
@@ -705,7 +790,7 @@ fun LauncherApp(
                     app = editApp!!,
                     state = state,
                     update = model.store::update,
-                    onDismiss = { editApp = null }
+                    onDismiss = { editAppKey = null }
                 )
 
                 // Empty Space Context Menu: Dark card with Change Wallpaper, Add Widget, Settings, and Manage Layout
@@ -714,7 +799,8 @@ fun LauncherApp(
                     onAddWidget = { emptyMenu = false; actions.widgets() },
                     onSettings = { emptyMenu = false; panel = "settings" },
                     onManageLayout = { emptyMenu = false; panel = "layout" },
-                    onDismiss = { emptyMenu = false }
+                    onDismiss = { emptyMenu = false },
+                    showSettings = state.prefs.behavior.contextSettings
                 )
 
             }
@@ -732,9 +818,21 @@ internal fun FloatingDock(
     apps: List<AppEntry>,
     repository: AppsRepository,
     badges: Map<String, Int>,
-    actions: WorkspaceActions
+    actions: WorkspaceActions,
+    scrolling: Boolean = false
 ) {
     val prefs = state.prefs.dock
+    var idleHidden by remember { mutableStateOf(false) }
+    var interaction by remember { mutableIntStateOf(0) }
+    val accessibility = LocalAccessibilityManager.current
+    LaunchedEffect(prefs.autoHide, interaction, scrolling, LocalAppDrag.current?.active) {
+        idleHidden = false
+        if (prefs.autoHide && !scrolling) {
+            delay(accessibility?.calculateRecommendedTimeoutMillis(3000L, containsControls = true) ?: 3000L)
+            idleHidden = true
+        }
+    }
+    val hidden = if (scrolling && prefs.showWhenScrolling) false else idleHidden || (scrolling && prefs.hideOnScroll)
     val isRight = prefs.side == "Right"
     val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }
     val drag = LocalAppDrag.current
@@ -753,15 +851,23 @@ internal fun FloatingDock(
     val shape = if (isRight) RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp)
         else RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
     BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth).windowInsetsPadding(WindowInsets.safeDrawing)
+        .pointerInput(Unit) {
+            awaitPointerEventScope { while (true) { awaitPointerEvent(); interaction++ } }
+        }
         .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)) {
         val positionedDock = state.positions.any { it.container == "dock" }
         val dockKeys = state.workspaceKeys("dock")
         val totalItems = (if (positionedDock) dockKeys.size else entries.size + folders.size) + (if (prefs.allApps) 1 else 0) + (if (gap) 1 else 0)
         val itemHeight = (56 * prefs.iconScale + if (prefs.labels) 36 else 16).dp
-        val estimatedHeight = (totalItems.coerceAtLeast(1) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
+        val estimatedHeight = (totalItems.coerceIn(1, prefs.maxItems) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
         val height = if (prefs.fullWidth) maxHeight else estimatedHeight
         val top = ((maxHeight - height) * prefs.alignment).coerceAtLeast(0.dp)
         CompositionLocalProvider(LocalContentColor provides surfaceContent(theme)) {
+            if (hidden) {
+                IconButton(onClick = { idleHidden = false; interaction++ }, modifier = Modifier.align(Alignment.Center)) {
+                    Icon(Icons.Rounded.ChevronLeft, "Show dock")
+                }
+            } else {
             Column(
                 Modifier.offset(y = top).width(dockWidth).height(height).clip(shape)
                     .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
@@ -790,13 +896,14 @@ internal fun FloatingDock(
                 if (gap && to == entries.size) Spacer(Modifier.height(itemHeight))
                 folders.forEach { item ->
                     FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) },
-                        { actions.folderActions(item) }, Modifier.fillMaxWidth())
+                        { actions.folderActions(item) }, Modifier.fillMaxWidth(), "dock")
                 }
                 }
                 if (prefs.allApps && !prefs.allAppsLeft) allAppsButton()
                 if (totalItems == 0) IconButton(onClick = { actions.navigate(Screen.APPS) }) {
                     Icon(Icons.Rounded.Add, "Add apps to dock")
                 }
+            }
             }
         }
         // Stable hit regions prevent the preview gap from moving its own drop target.

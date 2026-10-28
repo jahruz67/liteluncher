@@ -79,7 +79,7 @@ private fun GestureSetting(
     val app = apps.firstOrNull { it.key == binding.target }
     val description = when (binding.action) {
         Action.APP -> app?.label ?: "Unavailable app · choose another app"
-        Action.SHORTCUT -> "${app?.label ?: "Unavailable app"} · App shortcut"
+        Action.SHORTCUT -> "${app?.label ?: "Unavailable app"} · ${binding.shortcutId}"
         else -> binding.action.actionLabel()
     }
     SettingsSection(gesture.gestureLabel()) {
@@ -140,12 +140,16 @@ private fun GestureBindingDialog(
                 if (action == Action.SHORTCUT) {
                     val label = apps.firstOrNull { it.key == target }?.label ?: "Choose an app for shortcuts"
                     Button(onClick = { choosingShortcut = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (shortcutId.isBlank()) label else "$label · Shortcut selected")
+                        Text(if (shortcutId.isBlank()) label else "$label · $shortcutId")
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("Cancel") }
-                    TextButton(onClick = {
+                    TextButton(enabled = when (action) {
+                        Action.APP -> apps.any { it.key == target }
+                        Action.SHORTCUT -> apps.any { it.key == target } && shortcutId.isNotBlank()
+                        else -> true
+                    }, onClick = {
                         val valid = when (action) {
                             Action.APP -> target.isNotBlank()
                             Action.SHORTCUT -> target.isNotBlank() && shortcutId.isNotBlank()
@@ -217,9 +221,9 @@ private fun AppShortcutChooserDialog(
     onDismiss: () -> Unit,
     onSelect: (AppEntry, String) -> Unit
 ) {
-    var pickedApp by remember { mutableStateOf(apps.firstOrNull { it.key == selectedAppKey }) }
+    var pickedAppKey by rememberSaveable { mutableStateOf(selectedAppKey) }
     val context = LocalContext.current
-    val selectedApp = pickedApp
+    val selectedApp = apps.firstOrNull { it.key == pickedAppKey }
     val shortcuts by key(selectedApp?.key) { produceState<List<ShortcutInfo>>(emptyList()) {
         value = withContext(Dispatchers.IO) {
             val app = selectedApp ?: return@withContext emptyList()
@@ -229,7 +233,7 @@ private fun AppShortcutChooserDialog(
                     setPackage(app.packageName)
                     setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
                 }
-                launcher.getShortcuts(query, app.user).orEmpty()
+                launcher.getShortcuts(query, app.user).orEmpty().filter { it.isEnabled }
             }.getOrDefault(emptyList())
         }
     } }
@@ -241,7 +245,7 @@ private fun AppShortcutChooserDialog(
                     Text("Choose an app", style = MaterialTheme.typography.titleMedium)
                     LazyColumn(Modifier.weight(1f)) {
                         items(apps.sortedBy { it.label.lowercase(Locale.ROOT) }, key = { it.key }) { app ->
-                            Text(app.label, modifier = Modifier.fillMaxWidth().clickable { pickedApp = app }.padding(vertical = 10.dp))
+                            Text(app.label, modifier = Modifier.fillMaxWidth().clickable { pickedAppKey = app.key }.padding(vertical = 10.dp))
                         }
                     }
                 } else {
@@ -256,7 +260,7 @@ private fun AppShortcutChooserDialog(
                             }
                         }
                     }
-                    TextButton(onClick = { pickedApp = null }) { Text("Choose another app") }
+                    TextButton(onClick = { pickedAppKey = "" }) { Text("Choose another app") }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Cancel") }
             }
@@ -275,8 +279,8 @@ private fun Gesture.gestureLabel(): String = when (this) {
     Gesture.TWO_UP -> "Swipe up (Two Fingers)"
     Gesture.TWO_LEFT -> "Swipe left (Two Fingers)"
     Gesture.TWO_RIGHT -> "Swipe right (Two Fingers)"
-    Gesture.PINCH_IN -> "Zoom in"
-    Gesture.PINCH_OUT -> "Zoom out"
+    Gesture.PINCH_IN -> "Pinch inward"
+    Gesture.PINCH_OUT -> "Spread outward"
 }
 
 private fun Action.actionLabel(): String = when (this) {

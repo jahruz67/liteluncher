@@ -42,7 +42,12 @@ enum class Action { NONE, HOME, SEARCH, APPS, DESKTOP, FAVORITES, SETTINGS, SCRE
 data class GestureBinding(val action: Action = Action.NONE, val target: String = "", val shortcutId: String = "")
 
 fun defaultGestures(): Map<Gesture, GestureBinding> = Gesture.entries.associateWith {
-    GestureBinding(if (it == Gesture.TWO_DOWN) Action.NOTIFICATIONS else Action.NONE)
+    GestureBinding(when (it) {
+        Gesture.TWO_DOWN -> Action.NOTIFICATIONS
+        Gesture.SWIPE_UP, Gesture.SWIPE_DOWN, Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT,
+        Gesture.TWO_UP, Gesture.TWO_LEFT, Gesture.TWO_RIGHT -> Action.NAVIGATE
+        else -> Action.NONE
+    })
 }
 
 @Serializable
@@ -59,6 +64,13 @@ data class GridPrefs(
     val textScale: Float = 1f, val intermediateSteps: Int = 0, val borderPadding: String = "Default",
     val preventChanges: Boolean = false
 )
+
+val GridPrefs.borderPaddingDp: Int get() = when (borderPadding) {
+    "None" -> 0
+    "Small" -> 8
+    "Large" -> 24
+    else -> padding
+}
 @Serializable
 data class ClockPrefs(
     val enabled: Boolean = true, val use24Hour: Boolean = false, val size: Int = 52,

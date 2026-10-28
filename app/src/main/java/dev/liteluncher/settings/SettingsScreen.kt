@@ -96,6 +96,7 @@ fun SettingsScreen(
                             ToggleSetting("Show Text", state.prefs.drawer.labels) { next -> update { it.copy(drawer = it.drawer.copy(labels = next)) } }
                             FloatSetting("Text Size", state.prefs.drawer.textScale, .5f..1.5f) { next -> update { it.copy(drawer = it.drawer.copy(textScale = next)) } }
                             ToggleSetting("Multiline Labels", state.prefs.drawer.multiline) { next -> update { it.copy(drawer = it.drawer.copy(multiline = next)) } }
+                            ToggleSetting("List layout", state.prefs.drawer.listMode) { next -> update { it.copy(drawer = it.drawer.copy(listMode = next)) } }
                         }
                     }
                     "Favorites" -> favoritePreferences(state, apps, update, onUpdate, onUsageAccess, onRequestContacts)
@@ -184,7 +185,7 @@ private fun LazyListScope.appearanceSettings(
     item {
         val appearance = prefs.appearance
         SettingsSection("Dark Mode") {
-            ChoiceSetting("Launcher mode", appearance.mode, listOf(ThemeMode.DARK, ThemeMode.LIGHT, ThemeMode.ADVANCED).map { it to it.name.settingLabel() }) { next ->
+            ChoiceSetting("Launcher mode", appearance.mode, ThemeMode.entries.map { it to it.name.settingLabel() }) { next ->
                 update { it.copy(appearance = it.appearance.copy(mode = next)) }
             }
             ToggleSetting("Dark texts on screens", appearance.darkTexts) { next ->
@@ -251,6 +252,7 @@ private fun LazyListScope.badgeSettings(
 ) {
     item {
         val badge = prefs.badges
+        val context = androidx.compose.ui.platform.LocalContext.current
         SettingsSection("Notifications") {
             ToggleSetting("Show Notifications", badge.enabled) { next -> update { it.copy(badges = it.badges.copy(enabled = next)) } }
             SettingsLink("Notification access", "Allow Lite Luncher to read active notifications for badges", onNotificationAccess)
@@ -259,8 +261,8 @@ private fun LazyListScope.badgeSettings(
             }
             ColorSetting("Badge Color", badge.color) { next -> update { it.copy(badges = it.badges.copy(color = next)) } }
             FloatSetting("Badge Size", badge.scale, .5f..1.5f) { next -> update { it.copy(badges = it.badges.copy(scale = next)) } }
-            ToggleSetting("Show notification count", badge.counts, "Show a number instead of a dot.") { next -> update { it.copy(badges = it.badges.copy(counts = next)) } }
-            TextButton(onClick = onNotificationAccess) { Text("Refresh badges") }
+            ToggleSetting("Show notification count", badge.counts, "Show a number instead of a dot.") { next -> update { it.copy(badges = it.badges.copy(counts = next, style = if (next) "Count" else "Dot")) } }
+            TextButton(onClick = { dev.liteluncher.platform.LauncherNotificationService.refresh(context) }) { Text("Refresh badges") }
         }
     }
 }

@@ -68,6 +68,7 @@ fun AppContextMenu(
     }
     fun update(block: (LauncherState) -> LauncherState) { actions.update(block); onDismiss() }
     val removable = when {
+        source == Screen.DESKTOP -> state.desktopApps.values.any { app.key in it } && !state.prefs.desktop.preventChanges
         fromDock -> app.key in state.dockApps && !state.prefs.dock.preventChanges
         source == Screen.HOME -> app.key in state.homeApps && !state.prefs.home.preventChanges
         source == Screen.FAVORITES -> app.key in state.favoriteApps
@@ -183,7 +184,7 @@ fun AppContextMenu(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { repository.launchShortcut(shortcut); onDismiss() }
+                                    .clickable { actions.shortcut(shortcut); onDismiss() }
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -196,9 +197,11 @@ fun AppContextMenu(
                                         if (state.layoutSpace(LayoutArea.HOME) <= 0) {
                                             android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
                                             onDismiss()
+                                        } else if (!repository.syncShortcutPins(state.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial))) {
+                                            SystemActions.error(context, "Android could not pin this shortcut")
                                         } else update { current ->
                                             if (current.prefs.home.preventChanges || current.layoutSpace(LayoutArea.HOME) <= 0) current
-                                            else current.copy(shortcuts = (current.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial)).distinctBy { Triple(it.packageName, it.id, it.userSerial) })
+                                            else current.copy(shortcuts = (current.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial)).distinctBy { it.layoutKey to it.container })
                                         }
                                     },
                                     enabled = !state.prefs.home.preventChanges,
@@ -249,7 +252,8 @@ fun EmptySpaceMenuDialog(
     onAddWidget: () -> Unit,
     onSettings: () -> Unit,
     onManageLayout: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    showSettings: Boolean = true
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -275,7 +279,7 @@ fun EmptySpaceMenuDialog(
                 ActionRowItem("Add Widget", Icons.Rounded.Widgets, onAddWidget)
                 HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
 
-                ActionRowItem("Settings", Icons.Rounded.Tune, onSettings)
+                if (showSettings) ActionRowItem("Settings", Icons.Rounded.Tune, onSettings)
                 HorizontalDivider(color = Color(0x15FFFFFF), thickness = 0.5.dp)
                 ActionRowItem("Manage Layout", Icons.Rounded.DashboardCustomize, onManageLayout)
             }
@@ -300,16 +304,16 @@ private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vect
 
 @Composable
 fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) -> LauncherState) -> Unit, onDismiss: () -> Unit) {
-    var label by remember(app.key) { mutableStateOf(state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label) }
-    var iconUri by remember(app.key) { mutableStateOf(state.overrides[app.key]?.iconUri.orEmpty()) }
-    var backupIcon by remember(app.key) { mutableStateOf(state.overrides[app.key]?.backupIcon) }
-    var shape by remember(app.key) { mutableStateOf(state.overrides[app.key]?.shape) }
+    var label by rememberSaveable(app.key) { mutableStateOf(state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label) }
+    var iconUri by rememberSaveable(app.key) { mutableStateOf(state.overrides[app.key]?.iconUri.orEmpty()) }
+    var useBackup by rememberSaveable(app.key) { mutableStateOf(true) }
+    val backupIcon = state.overrides[app.key]?.backupIcon.takeIf { useBackup }
+    var shape by rememberSaveable(app.key) { mutableStateOf(state.overrides[app.key]?.shape) }
     val context = LocalContext.current
     val pickIcon = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             iconUri = uri.toString()
-            backupIcon = null
+            useBackup = false
         }
     }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit application") }, text = {
@@ -320,21 +324,28 @@ fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) 
                 Icon(Icons.Rounded.Image, null)
                 Text("  Choose icon image")
             }
-            if (iconUri.isNotBlank() || backupIcon != null) TextButton(onClick = { iconUri = ""; backupIcon = null }) { Text("Use default icon") }
+            if (iconUri.isNotBlank() || backupIcon != null) TextButton(onClick = { iconUri = ""; useBackup = false }) { Text("Use default icon") }
 
             Text("Icon Shape", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(IconShape.SQUIRCLE, IconShape.CIRCLE, IconShape.ROUNDED_SQUARE, IconShape.TEARDROP).forEach { s ->
+            Column {
+                IconShape.entries.chunked(3).forEach { row -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { row.forEach { s ->
                     FilterChip(
-                        selected = (shape ?: state.prefs.appearance.iconShape) == s,
+                        selected = shape == s,
                         onClick = { shape = s },
                         label = { Text(s.name.take(4)) }
                     )
-                }
+                } } }
             }
+            FilterChip(selected = shape == null, onClick = { shape = null }, label = { Text("Follow global shape") })
         }
     }, confirmButton = {
         TextButton(onClick = {
+            if (iconUri.isNotBlank() && runCatching {
+                context.contentResolver.takePersistableUriPermission(android.net.Uri.parse(iconUri), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }.isFailure) {
+                SystemActions.error(context, "Cannot retain access to this image. Choose another image.")
+                return@TextButton
+            }
             update { it.copy(overrides = it.overrides + (app.key to AppOverride(label.trim().takeIf { name -> name != app.label }.orEmpty(), iconUri, shape, backupIcon))) }
             onDismiss()
         }) { Text("Save") }
@@ -353,6 +364,7 @@ fun FolderOverlay(
     actions: WorkspaceActions,
     onDismiss: () -> Unit
 ) {
+    val folderBadges by LauncherNotificationService.counts.collectAsStateWithLifecycle()
     val members = remember(folder.apps, apps) {
         val byKey = apps.associateBy { it.key }
         folder.apps.mapNotNull(byKey::get)
@@ -368,13 +380,15 @@ fun FolderOverlay(
         }
         if (draggingOutside && drag?.active == null) onDismiss()
     }
-    val folderColor = parseColor(state.prefs.folders.color)
-    val background = folderColor.copy(alpha = folderColor.alpha * state.prefs.folders.opacity)
+    val folderPrefs = state.prefs.folders
+    val folderColor = if (folderPrefs.background == "Custom") parseColor(folderPrefs.color)
+        else surfaceColor(state.prefs.appearance.launcher, MaterialTheme.colorScheme.primary)
+    val background = folderColor.copy(alpha = folderColor.alpha * folderPrefs.opacity)
     val folderContent = if (folderColor.luminance() > .5f) Ink else Mist
 
     // Keep the source composed until release so its pointer handler continues the drag.
     Box(Modifier.fillMaxSize().alpha(if (draggingOutside) 0f else 1f).background(ColorForOverlay).clickable(onClick = onDismiss)) {
-        if (folder.entryOrder.isNotEmpty()) {
+        if (folder.entryOrder.isNotEmpty() && !stack) {
             val keys = state.workspaceKeys("folder:${folder.id}")
             Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp)
                 .onGloballyPositioned { bounds = it.boundsInRoot() }.appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
@@ -391,7 +405,7 @@ fun FolderOverlay(
                             Row(Modifier.fillMaxWidth()) {
                                 row.forEach { key ->
                                     WorkspaceEntry(key, "folder:${folder.id}", state, apps, repository,
-                                        state.prefs.home.copy(columns = 3), emptyMap(), actions, Modifier.weight(1f).height(100.dp), onDismiss)
+                                        state.prefs.home.copy(columns = 3), folderBadges, actions, Modifier.weight(1f).height(100.dp), onDismiss)
                                 }
                                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                             }
@@ -417,8 +431,9 @@ fun FolderOverlay(
                 ) {
                     Text(folder.name, fontSize = 12.sp, color = Mist, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
                 }
-                members.forEachIndexed { index, app ->
-                    val fan = (kotlin.math.sin((index.toFloat() / (members.size - 1).coerceAtLeast(1)) * Math.PI) * 24).toInt()
+                val keys = state.workspaceKeys("folder:${folder.id}")
+                keys.forEachIndexed { index, entryKey ->
+                    val fan = (kotlin.math.sin((index.toFloat() / (keys.size - 1).coerceAtLeast(1)) * Math.PI) * 24).toInt()
                     Surface(
                         color = background,
                         contentColor = folderContent,
@@ -427,17 +442,8 @@ fun FolderOverlay(
                         border = BorderStroke(1.dp, Color(0x22FFFFFF)),
                         modifier = Modifier.offset(x = (if (left) fan else -fan).dp).widthIn(min = 160.dp, max = 240.dp)
                     ) {
-                        Row(Modifier.appIconGestures(app, null, !state.folderLocked(folder.id), { actions.launch(app); onDismiss() }, { actions.menu(app) }, folder.id)
-                            .padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                            AppIcon(app, repository, state, 36)
-                            Text(
-                                state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label,
-                                modifier = Modifier.padding(start = 12.dp),
-                                fontSize = 13.sp,
-                                color = folderContent,
-                                maxLines = 1
-                            )
-                        }
+                        WorkspaceEntry(entryKey, "folder:${folder.id}", state, apps, repository,
+                            state.prefs.home.copy(iconScale = .7f), folderBadges, actions, Modifier.fillMaxWidth(), onDismiss)
                     }
                 }
             }
@@ -461,7 +467,7 @@ fun FolderOverlay(
                         items(members.chunked(3)) { row ->
                             Row(Modifier.fillMaxWidth()) {
                                 row.forEach { app ->
-                                    AppTile(app, repository, state, state.prefs.home.copy(columns = 3), 0, { actions.launch(app); onDismiss() }, { actions.menu(app) }, Modifier.weight(1f),
+                                    AppTile(app, repository, state, state.prefs.home.copy(columns = 3), folderBadges[app.badgeKey] ?: 0, { actions.launch(app); onDismiss() }, { actions.menu(app) }, Modifier.weight(1f),
                                         draggable = !state.folderLocked(folder.id), dragFolderId = folder.id)
                                 }
                                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
@@ -475,12 +481,13 @@ fun FolderOverlay(
 }
 
 @Composable
-internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean, onEdit: () -> Unit, onDismiss: () -> Unit) {
+internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean, onEdit: () -> Unit, onDismiss: () -> Unit, onRemove: () -> Unit = {}) {
     AnchoredIconMenu(anchor, onDismiss) {
         Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF282828), modifier = Modifier.width(224.dp)) {
             Column(Modifier.padding(12.dp)) {
                 Text(folder.name, color = Color.White)
                 if (!locked) ActionRowItem("Edit folder", Icons.Rounded.Edit, onEdit)
+                if (!locked) ActionRowItem("Delete folder", Icons.Rounded.DeleteOutline, onRemove)
             }
         }
     }
@@ -490,14 +497,14 @@ private val ColorForOverlay = Color.Black.copy(alpha = .5f)
 
 
 @Composable
-internal fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (FolderItem) -> Unit, onDismiss: () -> Unit) {
-    var name by remember(folder.id) { mutableStateOf(folder.name) }
-    var selected by remember(folder.id) { mutableStateOf(folder.apps) }
+internal fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (FolderItem) -> Unit, onDismiss: () -> Unit, overrides: Map<String, AppOverride> = emptyMap()) {
+    var name by rememberSaveable(folder.id) { mutableStateOf(folder.name) }
+    var selected by rememberSaveable(folder.id) { mutableStateOf(folder.apps) }
     var filter by rememberSaveable(folder.id) { mutableStateOf("") }
     val appKeys = remember(apps) { apps.mapTo(hashSetOf()) { it.key } }
     val selectedKeys = remember(selected) { selected.toHashSet() }
     val unavailable = remember(selected, appKeys) { selected.filter { it !in appKeys } }
-    val matching = remember(apps, filter) { apps.filter { it.label.contains(filter, true) } }
+    val matching = remember(apps, filter, overrides) { apps.filter { (overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(filter, true) } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit folder") }, text = {
         Column {
             OutlinedTextField(name, { name = it.take(128) }, label = { Text("Folder name") }, singleLine = true)
@@ -507,7 +514,7 @@ internal fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (Fol
                 items(unavailable, key = { "unavailable:$it" }) { key ->
                     Row(Modifier.fillMaxWidth().clickable { selected = selected - key }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(true, { selected = selected - key })
-                        Text("Unavailable app", fontSize = 13.sp)
+                        Text("Unavailable: $key", fontSize = 13.sp)
                     }
                 }
                 items(matching, key = { it.key }) { app ->
@@ -516,7 +523,7 @@ internal fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (Fol
                     val toggle = { selected = if (checked) selected - app.key else selected + app.key }
                     Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = toggle), verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked, { toggle() }, enabled = enabled)
-                        Text(app.label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        Text(overrides[app.key]?.label?.ifBlank { app.label } ?: app.label, fontSize = 13.sp, modifier = Modifier.weight(1f))
                     }
                 }
             }
