@@ -88,7 +88,10 @@ fun Modifier.launcherGestures(
                     pointerCountAction(pointerCount)
                     event.changes.firstOrNull { it.id == down.id }?.let {
                         displacement = it.position - start
-                        if (it.position != it.previousPosition) consumed = consumed || it.isConsumed
+                        // Click handlers consume release events; only held movement claims a drag.
+                        if (it.pressed && it.previousPressed && it.position != it.previousPosition) {
+                            consumed = consumed || it.isConsumed
+                        }
                     }
                     if (pressed.size >= 2) {
                         lastSpan = (pressed[0].position - pressed[1].position).getDistance()
@@ -100,10 +103,12 @@ fun Modifier.launcherGestures(
                 pointerCountAction(0)
             }
             val pinch = firstSpan > 0f && abs(lastSpan - firstSpan) > 64 * density
+            val verticalHomeSwipe = home && abs(displacement.y) > abs(displacement.x)
+            val swipeThreshold = if (verticalHomeSwipe) maxOf(48 * density, viewConfiguration.touchSlop * 2) else 68 * density
             when {
                 pinch && home && (!consumed || pointerCount >= 2) -> pinchAction(lastSpan < firstSpan)
                 pointerCount >= fingers && (!consumed || pointerCount >= 2) &&
-                    maxOf(abs(displacement.x), abs(displacement.y)) > 68 * density -> {
+                    maxOf(abs(displacement.x), abs(displacement.y)) > swipeThreshold -> {
                     val direction = if (abs(displacement.x) > abs(displacement.y)) {
                         if (displacement.x < 0) Direction.LEFT else Direction.RIGHT
                     } else if (displacement.y < 0) Direction.UP else Direction.DOWN
