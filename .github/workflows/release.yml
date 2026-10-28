@@ -2,35 +2,24 @@ name: Build and release APK
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag to create (for example, v1.0.0)'
-        required: true
-        default: 'v1.0.0'
-        type: string
+    branches:
+      - master
 
 permissions:
   contents: write
-
-concurrency:
-  group: android-release
-  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      # Manual runs build the selected ref and create the requested tag there.
+      # Each push releases its commit with an automatically generated tag.
       - name: Check out source
         uses: actions/checkout@v4
 
       - name: Validate release version
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          RELEASE_TAG: v1.0.${{ github.run_number }}
           RELEASE_RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
