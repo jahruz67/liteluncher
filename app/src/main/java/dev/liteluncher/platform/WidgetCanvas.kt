@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +54,7 @@ fun WidgetCanvas(
     onWidgetDeleted: ((WidgetItem) -> Unit)? = null,
     onCanvasBounds: (Rect) -> Unit = {},
     blocked: List<WidgetItem> = emptyList(),
+    isActive: Boolean = true,
     overlay: @Composable BoxWithConstraintsScope.() -> Unit = {}
 ) {
     val columns = prefs.columns.coerceIn(1, 24)
@@ -69,9 +69,9 @@ fun WidgetCanvas(
     val refreshes by controller.refreshes.collectAsState()
     val providerChanges by controller.providerChanges.collectAsState()
     val configuration = LocalConfiguration.current
-    var contextMenuWidget by rememberSaveable { mutableStateOf<Int?>(null) }
-    var resizingWidgetId by rememberSaveable { mutableStateOf<Int?>(null) }
-    var draft by remember { mutableStateOf<WidgetItem?>(null) }
+    var contextMenuWidget by remember(isActive) { mutableStateOf<Int?>(null) }
+    var resizingWidgetId by remember(isActive) { mutableStateOf<Int?>(null) }
+    var draft by remember(isActive) { mutableStateOf<WidgetItem?>(null) }
 
     LaunchedEffect(widgets, arranged) {
         if (arranged != widgets) currentChange(arranged)
@@ -80,7 +80,7 @@ fun WidgetCanvas(
     LaunchedEffect(prefs.preventChanges) {
         if (prefs.preventChanges) { resizingWidgetId = null; draft = null; contextMenuWidget = null }
     }
-    BackHandler(resizingWidgetId != null) { resizingWidgetId = null; draft = null }
+    BackHandler(isActive && resizingWidgetId != null) { resizingWidgetId = null; draft = null }
 
     fun remove(item: WidgetItem) {
         currentChange(currentItems.filterNot { it.id == item.id })
@@ -124,7 +124,7 @@ fun WidgetCanvas(
                     val isResizing = resizingWidgetId == item.id
                     val itemWidth = (cellWidth * item.columns - gutter * 2).coerceAtLeast(1.dp)
                     val itemHeight = (cellHeight * item.rows - gutter * 2).coerceAtLeast(1.dp)
-                    val onEdit = { contextMenuWidget = saved.id }
+                    val onEdit = { if (isActive) contextMenuWidget = saved.id }
                     val radius = (if (prefs.rounded) prefs.cornerRadius.coerceIn(0, 96) else 0).dp
 
                     Box(Modifier.offset(cellWidth * item.column + gutter, cellHeight * item.row + gutter)

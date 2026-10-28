@@ -640,6 +640,7 @@ fun LauncherApp(
                                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                                                 onCanvasBounds = { desktopBounds = it },
                                                 blocked = state.desktopObstacles().filter { it.page == currentDesktopPage },
+                                                isActive = manager.current == Screen.DESKTOP && (!horizontalPaging || !pager.isScrollInProgress),
                                                 overlay = {
                                                     val grid = state.prefs.desktop.grid.copy(columns = state.prefs.desktop.columns, rows = state.prefs.desktop.rows)
                                                     PositionedWorkspace("desktop:$currentDesktopPage", state, apps, model.apps, grid, badges, actions, Modifier.fillMaxSize())
