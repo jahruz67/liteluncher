@@ -44,6 +44,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -93,6 +94,7 @@ fun LauncherApp(
     val activity = context as Activity
     val view = LocalView.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     val manager = rememberSaveable(saver = ScreenManager.stateSaver) { ScreenManager() }
     var panel by rememberSaveable { mutableStateOf("") }
     var screenManagerReturn by rememberSaveable { mutableStateOf("") }
@@ -133,6 +135,10 @@ fun LauncherApp(
         } else toast("This app is unavailable in the current profile")
     }
     val navigate: (Screen) -> Unit = { screen ->
+        if (screen != Screen.SEARCH) {
+            focusManager.clearFocus(force = true)
+            keyboard?.hide()
+        }
         manager.navigate(screen, state.prefs.navigation)
         dockWakeSignal++
         folder = null
@@ -226,9 +232,16 @@ fun LauncherApp(
             target == AppDropTarget.Remove && item.source != null -> removeEntry(item.app.key, item.source)
             else -> {
                 model.store.update { place(it).state }
-                if (item.source == null && panel.isEmpty() && target is AppDropTarget.Area) {
+                val targetArea = when (target) {
+                    is AppDropTarget.Area -> target.area
+                    is AppDropTarget.CreateFolder -> target.area
+                    is AppDropTarget.Folder -> if (target.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
+                    AppDropTarget.Remove -> null
+                }
+                if (item.source == null && panel.isEmpty() && targetArea != null &&
+                    (target !is AppDropTarget.Folder || target.id != item.folderId)) {
                     keyboard?.hide()
-                    when (target.area) {
+                    when (targetArea) {
                         LayoutArea.HOME, LayoutArea.DOCK -> navigate(Screen.HOME)
                         LayoutArea.FAVORITES -> if (Screen.FAVORITES in state.prefs.navigation.enabledScreens) navigate(Screen.FAVORITES)
                     }
@@ -237,18 +250,8 @@ fun LauncherApp(
         }
     }
     val latestDrop by rememberUpdatedState(onAppDrop)
-    val drag = remember { AppDragController { item, target -> latestDrop(item, target) } }
+    val drag = remember { AppDragController(onDragStart = { appMenu = null }) { item, target -> latestDrop(item, target) } }
     LaunchedEffect(panel) { drag.cancel() }
-    val hoveredFolderId = (drag.hovered?.target as? AppDropTarget.Folder)?.id
-    LaunchedEffect(drag.active?.token, hoveredFolderId) {
-        if (drag.active != null && hoveredFolderId != null && folder?.id != hoveredFolderId) {
-            delay(500)
-            state.folders.find { it.id == hoveredFolderId }?.let {
-                folder = it
-                folderFromDock = it.id in state.dockFolders
-            }
-        }
-    }
 
     LaunchedEffect(ready, apps) {
         if (ready && apps.isNotEmpty() && !state.initialized) model.store.update { current ->
@@ -271,7 +274,11 @@ fun LauncherApp(
         if (homeSignal > 0) {
             drag.cancel()
             panel = ""; appMenu = null; editApp = null; folder = null; emptyMenu = false; widgetPicker = false
-            perform(state.prefs.gestures[Gesture.HOME] ?: GestureBinding(Action.HOME))
+            query = ""
+            focusManager.clearFocus(force = true)
+            keyboard?.hide()
+            if (manager.current != Screen.HOME) navigate(Screen.HOME)
+            else perform(state.prefs.gestures[Gesture.HOME] ?: GestureBinding(Action.HOME))
         }
     }
     LaunchedEffect(voiceQuery) {
@@ -638,12 +645,12 @@ fun LauncherApp(
                     },
                     onDismiss = { widgetPicker = false }
                 )
-            }
 
             MaterialTheme(colorScheme = baseScheme) {
             CompositionLocalProvider(LocalContentColor provides baseScheme.onSurface) {
-                if (appMenu != null) AppContextDialog(
+                if (appMenu != null && drag.active == null) AppContextMenu(
                     app = appMenu!!,
+                    anchor = drag.menuAnchor,
                     state = state,
                     repository = model.apps,
                     actions = actions,
@@ -677,6 +684,7 @@ fun LauncherApp(
 
             }
             }
+            }
         }
         }
     }
@@ -699,14 +707,15 @@ private fun FloatingDock(
     val theme = state.prefs.appearance.dock
     val shape = if (isRight) RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp)
         else RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
-    BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth).windowInsetsPadding(WindowInsets.safeDrawing)) {
+    BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth).windowInsetsPadding(WindowInsets.safeDrawing)
+        .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)) {
         val totalItems = entries.size + folders.size + if (prefs.allApps) 1 else 0
         val estimatedHeight = (totalItems.coerceAtLeast(1) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
         val height = if (prefs.fullWidth) maxHeight else estimatedHeight
         val top = ((maxHeight - height) * prefs.alignment).coerceAtLeast(0.dp)
         CompositionLocalProvider(LocalContentColor provides surfaceContent(theme)) {
             Column(
-                Modifier.offset(y = top).width(dockWidth).height(height).clip(shape).appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)
+                Modifier.offset(y = top).width(dockWidth).height(height).clip(shape)
                     .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
                     .verticalScroll(rememberScrollState()).padding(vertical = prefs.padding.dp),
                 horizontalAlignment = Alignment.CenterHorizontally

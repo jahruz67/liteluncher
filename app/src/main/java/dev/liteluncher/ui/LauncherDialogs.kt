@@ -4,17 +4,21 @@ package dev.liteluncher.ui
 
 import android.content.Intent
 import android.os.UserManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -22,8 +26,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -34,11 +43,11 @@ import dev.liteluncher.platform.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** App Icon Context Card: Dark card (#282828, 12dp radius) with top launcher actions (Edit, App-Info, Remove)
- * separated by hairline dividers from bottom Android deep app shortcuts */
+/** An in-window menu keeps the original icon's touch sequence alive for dragging. */
 @Composable
-fun AppContextDialog(
+fun AppContextMenu(
     app: AppEntry,
+    anchor: Rect,
     state: LauncherState,
     repository: AppsRepository,
     actions: WorkspaceActions,
@@ -60,26 +69,26 @@ fun AppContextDialog(
         else -> false
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    AnchoredIconMenu(anchor, onDismiss) {
         Surface(
             shape = RoundedCornerShape(12.dp),
             color = Color(0xFF282828),
             contentColor = Color.White,
             border = BorderStroke(1.dp, Color(0x33FFFFFF)),
-            modifier = Modifier.width(280.dp)
+            modifier = Modifier.width(224.dp).heightIn(max = 360.dp)
         ) {
-            Column(Modifier.padding(vertical = 8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
                 // Header: App Icon and Title
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    AppIcon(app, repository, state, 32)
-                    Spacer(Modifier.width(12.dp))
+                    AppIcon(app, repository, state, 24)
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 15.sp,
+                        fontSize = 13.sp,
                         maxLines = 1
                     )
                 }
@@ -129,7 +138,7 @@ fun AppContextDialog(
                             else current.copy(homeApps = (current.homeApps + app.key).distinct())
                         }
                         onDismiss()
-                    })
+                    }, compact = true)
                 }
                 if (app.key !in state.dockApps && !state.prefs.dock.preventChanges) {
                     ActionRowItem("Pin to Dock", Icons.Rounded.Dock, {
@@ -140,7 +149,7 @@ fun AppContextDialog(
                             else current.copy(dockApps = (current.dockApps + app.key).distinct())
                         }
                         onDismiss()
-                    })
+                    }, compact = true)
                 }
                 if (app.key !in state.favoriteApps) {
                     ActionRowItem("Pin to Favorites", Icons.Rounded.Favorite, {
@@ -152,7 +161,7 @@ fun AppContextDialog(
                             else current.copy(favoriteApps = (current.favoriteApps + app.key).distinct(),
                                 prefs = current.prefs.copy(favorites = current.prefs.favorites.copy(excluded = current.prefs.favorites.excluded - app.key)))
                         }
-                    })
+                    }, compact = true)
                 }
 
                 // Separated by hairline dividers from bottom Android deep app shortcuts
@@ -165,8 +174,8 @@ fun AppContextDialog(
                         color = Color.Gray,
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
                     )
-                    LazyColumn(Modifier.heightIn(max = 240.dp)) {
-                        items(shortcuts, key = { it.id }) { shortcut ->
+                    Column {
+                        shortcuts.forEach { shortcut ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -193,6 +202,33 @@ fun AppContextDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AnchoredIconMenu(anchor: Rect, onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    BackHandler(onBack = onDismiss)
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().clickable(
+            interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss
+        ))
+        Layout(content = content, modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)
+            .onGloballyPositioned { origin = it.positionInRoot() }) { measurables, constraints ->
+            val menu = measurables.single().measure(constraints.copy(minWidth = 0, minHeight = 0))
+            val gap = 8.dp.roundToPx()
+            val localAnchor = anchor.translate(-origin)
+            val x = (localAnchor.center.x.toInt() - menu.width / 2).coerceIn(0, constraints.maxWidth - menu.width)
+            val above = localAnchor.top.toInt() - gap - menu.height
+            val below = localAnchor.bottom.toInt() + gap
+            val y = when {
+                above >= 0 -> above
+                below + menu.height <= constraints.maxHeight -> below
+                localAnchor.top > constraints.maxHeight - localAnchor.bottom -> above
+                else -> below
+            }.coerceIn(0, constraints.maxHeight - menu.height)
+            layout(constraints.maxWidth, constraints.maxHeight) { menu.place(x, y) }
         }
     }
 }
@@ -240,17 +276,17 @@ fun EmptySpaceMenuDialog(
 }
 
 @Composable
-private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit, compact: Boolean = false) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = if (compact) 12.dp else 16.dp, vertical = if (compact) 8.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(icon, null, tint = Cerulean, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
-        Text(label, fontSize = 14.sp, color = Color.White)
+        Text(label, fontSize = if (compact) 12.sp else 14.sp, color = Color.White)
     }
 }
 
@@ -341,7 +377,7 @@ fun FolderOverlay(
                         border = BorderStroke(1.dp, Color(0x22FFFFFF)),
                         modifier = Modifier.offset(x = (if (left) fan else -fan).dp).widthIn(min = 160.dp, max = 240.dp)
                     ) {
-                        Row(Modifier.appIconGestures(app, null, !state.folderLocked(folder.id), { actions.launch(app); onDismiss() }, { actions.menu(app); onDismiss() }, folder.id)
+                        Row(Modifier.appIconGestures(app, null, !state.folderLocked(folder.id), { actions.launch(app); onDismiss() }, { actions.menu(app) }, folder.id)
                             .padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                             AppIcon(app, repository, state, 36)
                             Text(
@@ -377,7 +413,7 @@ fun FolderOverlay(
                         items(members.chunked(3)) { row ->
                             Row(Modifier.fillMaxWidth()) {
                                 row.forEach { app ->
-                                    AppTile(app, repository, state, state.prefs.home.copy(columns = 3), 0, { actions.launch(app); onDismiss() }, { actions.menu(app); onDismiss() }, Modifier.weight(1f),
+                                    AppTile(app, repository, state, state.prefs.home.copy(columns = 3), 0, { actions.launch(app); onDismiss() }, { actions.menu(app) }, Modifier.weight(1f),
                                         draggable = !state.folderLocked(folder.id), dragFolderId = folder.id)
                                 }
                                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }

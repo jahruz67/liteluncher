@@ -1,5 +1,7 @@
 package dev.liteluncher.data
 
+import java.util.UUID
+
 internal const val MAX_LAYOUT_FOLDERS = 128
 internal const val MAX_LAYOUT_APPS = 2_048
 
@@ -7,6 +9,7 @@ enum class LayoutArea(val title: String) { HOME("Home"), DOCK("Dock"), FAVORITES
 
 internal sealed interface AppDropTarget {
     data class Area(val area: LayoutArea, val atKey: String? = null) : AppDropTarget
+    data class CreateFolder(val area: LayoutArea, val atKey: String) : AppDropTarget
     data class Folder(val id: String, val atKey: String? = null) : AppDropTarget
     data object Remove : AppDropTarget
 }
@@ -80,6 +83,7 @@ internal fun applyAppDrop(state: LauncherState, key: String, source: LayoutArea?
         AppDropTarget.Remove -> if (source == null) LayoutEditResult(state, "This app is not a pinned entry")
             else LayoutEditResult(removeLayoutApp(state, source, key))
         is AppDropTarget.Area -> placeLayoutApp(state, key, source, target)
+        is AppDropTarget.CreateFolder -> createLayoutFolder(state, key, source, target)
         is AppDropTarget.Folder -> placeFolderApp(state, key, source, target)
     }
     val staysInFolder = target is AppDropTarget.Folder && target.id == sourceFolder ||
@@ -88,6 +92,23 @@ internal fun applyAppDrop(state: LauncherState, key: String, source: LayoutArea?
     return result.copy(state = result.state.copy(folders = result.state.folders.map {
         if (it.id == sourceFolder) it.copy(apps = it.apps - key) else it
     }))
+}
+
+private fun createLayoutFolder(state: LauncherState, key: String, source: LayoutArea?, target: AppDropTarget.CreateFolder): LayoutEditResult {
+    val area = target.area
+    if (area == LayoutArea.FAVORITES) return LayoutEditResult(state, "Folders can only be created on Home or Dock")
+    if (state.layoutLocked(area)) return LayoutEditResult(state, "${area.title} is locked")
+    if (key == target.atKey) return LayoutEditResult(state)
+    val apps = state.layoutApps(area)
+    if (target.atKey !in apps) return LayoutEditResult(state, "This app is no longer on ${area.title}")
+    if (state.folders.size >= MAX_LAYOUT_FOLDERS) return LayoutEditResult(state, "The folder limit has been reached")
+    val folder = FolderItem(UUID.randomUUID().toString(), "Folder", listOf(target.atKey, key))
+    var next = state.withLayoutApps(area, apps - folder.apps.toSet()).copy(folders = state.folders + folder)
+    next = if (area == LayoutArea.HOME) next.copy(homeFolders = next.homeFolders + folder.id)
+        else next.copy(dockFolders = next.dockFolders + folder.id)
+    if (source != null && source != area && source != LayoutArea.FAVORITES)
+        next = next.withLayoutApps(source, next.layoutApps(source) - key)
+    return LayoutEditResult(next)
 }
 
 private fun placeLayoutApp(state: LauncherState, key: String, source: LayoutArea?, target: AppDropTarget.Area): LayoutEditResult {
