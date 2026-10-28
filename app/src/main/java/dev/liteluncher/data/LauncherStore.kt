@@ -251,8 +251,20 @@ class LauncherStore(context: Context) {
             decode(raw, portable = false)
         } catch (failure: Exception) {
             Log.w(TAG, "Recovering an invalid launcher snapshot", failure)
-            val recovery = java.io.File(applicationContext.filesDir, "launcher-snapshot-recovery.json")
-            if (!recovery.exists()) recovery.writeText(raw)
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
+                .joinToString("") { "%02x".format(it.toInt() and 255) }
+            val recovery = java.io.File(applicationContext.filesDir, "launcher-snapshot-recovery-$digest.json")
+            if (!recovery.exists()) {
+                val atomic = android.util.AtomicFile(recovery)
+                val output = atomic.startWrite()
+                try {
+                    output.write(raw.toByteArray())
+                    atomic.finishWrite(output)
+                } catch (error: Exception) {
+                    atomic.failWrite(output)
+                    throw error
+                }
+            }
             LauncherState()
         }
     }
@@ -331,9 +343,7 @@ class LauncherStore(context: Context) {
         fun sanitize(value: LauncherState): LauncherState {
             val requested = sanitizePrefs(value.prefs)
             // Keep populated pages reachable instead of clamping or deleting their contents.
-            val lastPage = (value.desktopApps.filterValues { it.isNotEmpty() }.keys +
-                value.widgets.map { it.page } + value.pendingWidgets.map { it.page }).filter { it in 0..15 }.maxOrNull() ?: 0
-            val prefs = requested.copy(desktop = requested.desktop.copy(pageCount = maxOf(requested.desktop.pageCount, lastPage + 1)))
+            val prefs = requested.copy(desktop = requested.desktop.copy(pageCount = maxOf(requested.desktop.pageCount, value.minimumDesktopPages)))
             val folders = value.folders.asSequence().mapNotNull { folder ->
                 val id = key(folder.id) ?: return@mapNotNull null
                 folder.copy(id = id, name = text(folder.name, 128), apps = keys(folder.apps, MAX_APPS), iconUri = safeUri(folder.iconUri),
@@ -436,7 +446,7 @@ class LauncherStore(context: Context) {
                         .ifEmpty { defaults.behavior.verticalTransition }),
                 gestures = value.gestures.mapValues { (_, binding) ->
                     binding.copy(target = key(binding.target, 1_024).orEmpty(),
-                        shortcutId = key(binding.shortcutId, 1_024).orEmpty())
+                        shortcutId = key(binding.shortcutId, 1_024).orEmpty(), shortcutLabel = text(binding.shortcutLabel, 128))
                 }.toMap()
             )
         }

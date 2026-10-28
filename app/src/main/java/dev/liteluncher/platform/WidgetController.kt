@@ -307,7 +307,9 @@ class WidgetController(
         }?.layout ?: WidgetGrid.arrange(layoutItems.filter { it.page == page }, columns, rows).also {
             cachedPlacementLayout = PlacementLayout(layoutItems, columns, rows, page, it)
         }
-        val occupiedItems = occupied.placed + obstacles.filter { it.page == page && it.restoreKey != location?.restoreKey }
+        val occupiedItems = occupied.placed + obstacles.filter {
+            it.page == page && (location?.restoreKey.isNullOrBlank() || it.restoreKey != location?.restoreKey)
+        }
         val maximum = maximumSpan(info)
         if (!location?.restoreKey.isNullOrEmpty()) {
             if (location!!.columns !in minimum.first..maximum.first || location.rows !in minimum.second..maximum.second) return null

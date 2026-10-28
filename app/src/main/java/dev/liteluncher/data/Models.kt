@@ -39,7 +39,7 @@ enum class Gesture { HOME, DOUBLE_TAP, SWIPE_UP, SWIPE_DOWN, SWIPE_LEFT, SWIPE_R
 @Serializable
 enum class Action { NONE, HOME, SEARCH, APPS, DESKTOP, FAVORITES, SETTINGS, SCREEN_MANAGER, WALLPAPER, APP, SHORTCUT, NAVIGATE, NOTIFICATIONS }
 @Serializable
-data class GestureBinding(val action: Action = Action.NONE, val target: String = "", val shortcutId: String = "")
+data class GestureBinding(val action: Action = Action.NONE, val target: String = "", val shortcutId: String = "", val shortcutLabel: String = "")
 
 fun defaultGestures(): Map<Gesture, GestureBinding> = Gesture.entries.associateWith {
     GestureBinding(when (it) {

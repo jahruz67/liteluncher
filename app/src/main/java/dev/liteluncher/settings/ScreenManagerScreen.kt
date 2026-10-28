@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import dev.liteluncher.data.LauncherState
 import dev.liteluncher.data.NavigationPrefs
 import dev.liteluncher.data.Screen
+import dev.liteluncher.data.minimumDesktopPages
 
 private val FrostedGlass = Color(0xBFFFFFFF)
 private val CardInk = Color(0xFF222222)
@@ -110,7 +111,7 @@ fun ScreenManagerScreen(
                     }, Modifier.weight(2f))
                     ManagerControl("Reset", Icons.Rounded.RotateLeft, {
                         onUpdate { current -> current.copy(prefs = current.prefs.copy(navigation = NavigationPrefs(),
-                            desktop = current.prefs.desktop.copy(pageCount = 1))) }
+                            desktop = current.prefs.desktop.copy(pageCount = current.minimumDesktopPages))) }
                     }, Modifier.weight(1f), enabled = navigation != NavigationPrefs() || state.prefs.desktop.pageCount != 1)
                 }
             }
@@ -185,7 +186,7 @@ private fun AdvancedNavigationDialog(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Desktop pages", modifier = Modifier.weight(1f))
-                IconButton(enabled = state.prefs.desktop.pageCount > 1, onClick = {
+                IconButton(enabled = state.prefs.desktop.pageCount > state.minimumDesktopPages, onClick = {
                     onUpdate { current -> current.copy(prefs = current.prefs.copy(desktop =
                         current.prefs.desktop.copy(pageCount = (current.prefs.desktop.pageCount - 1).coerceAtLeast(1)))) }
                 }) { Icon(Icons.Rounded.Remove, "Remove desktop page") }
@@ -195,6 +196,8 @@ private fun AdvancedNavigationDialog(
                         current.prefs.desktop.copy(pageCount = (current.prefs.desktop.pageCount + 1).coerceAtMost(16)))) }
                 }) { Icon(Icons.Rounded.Add, "Add desktop page") }
             }
+            if (state.minimumDesktopPages > 1) Text("Move or remove entries from the last desktop page before removing that page.",
+                style = MaterialTheme.typography.bodySmall)
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } })
 }

@@ -51,7 +51,9 @@ internal fun rememberBackupBitmap(icon: BackupIcon?): Bitmap? {
                 } else if (icon != null && icon.packageName.isNotBlank() && icon.resourceName.isNotBlank()) {
                     val resources = context.packageManager.getResourcesForApplication(icon.packageName)
                     val type = icon.resourceName.substringBeforeLast('/', "drawable").substringAfter(':')
-                    val id = resources.getIdentifier(icon.resourceName.substringAfterLast('/'), type, icon.packageName)
+                    val name = icon.resourceName.substringAfterLast('/')
+                    val id = resources.getIdentifier(name, type, icon.packageName).takeIf { it != 0 }
+                        ?: resources.getIdentifier(name, "mipmap", icon.packageName)
                     if (id == 0) null else resources.getDrawable(id, null).toBitmap(168, 168)
                 } else null
             }.getOrNull()
@@ -162,12 +164,7 @@ internal fun PositionedWorkspace(container: String, state: LauncherState, apps: 
     }
     val positions = remember(state, container, prefs.columns, prefs.rows) { state.workspacePositions(container, prefs.columns, prefs.rows) }
     val overflow = state.workspaceKeys(container).filterNot { key -> positions.any { it.key == key } }
-    Column(modifier) {
-    if (overflow.isNotEmpty()) Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
-        Text("Entries outside the grid", style = MaterialTheme.typography.labelSmall)
-        overflow.forEach { key -> WorkspaceEntry(key, container, state, apps, repository, prefs.copy(iconScale = .5f, labels = true), badges, actions, Modifier.fillMaxWidth().height(76.dp)) }
-    }
-    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+    BoxWithConstraints(modifier) {
         val cellWidth = maxWidth / prefs.columns
         val cellHeight = maxHeight / prefs.rows
         val page = container.takeIf { it.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull()
@@ -184,14 +181,18 @@ internal fun PositionedWorkspace(container: String, state: LauncherState, apps: 
                         .width(cellWidth * position.columns).height(cellHeight * position.rows))
             }
         }
-    }
+        if (overflow.isNotEmpty()) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = 144.dp)
+            .background(MaterialTheme.colorScheme.surface).verticalScroll(rememberScrollState())) {
+            Text("Entries outside the grid", style = MaterialTheme.typography.labelSmall)
+            overflow.forEach { key -> WorkspaceEntry(key, container, state, apps, repository, prefs.copy(iconScale = .5f, labels = true), badges, actions, Modifier.fillMaxWidth().height(76.dp)) }
+        }
     }
 }
 
 @Composable
-internal fun PendingWidgetTile(item: PortableWidget, controller: WidgetController, modifier: Modifier = Modifier, onRemove: () -> Unit) {
+internal fun PendingWidgetTile(item: PortableWidget, controller: WidgetController, modifier: Modifier = Modifier, enabled: Boolean = true, onRemove: () -> Unit) {
     val context = LocalContext.current
-    Column(modifier.background(Panel).clickable {
+    Column(modifier.background(Panel).clickable(enabled = enabled) {
         val provider = controller.providers().find { it.provider.flattenToString() == item.provider }
         if (provider == null) SystemActions.error(context, "Install this widget's app before restoring it")
         else controller.add(provider, item.location())
@@ -199,6 +200,6 @@ internal fun PendingWidgetTile(item: PortableWidget, controller: WidgetControlle
         Icon(Icons.Rounded.Widgets, null, tint = Cerulean)
         Text("Restore widget", fontSize = 12.sp)
         Text(item.provider.substringBefore('/'), fontSize = 10.sp, maxLines = 2, textAlign = TextAlign.Center)
-        TextButton(onClick = onRemove) { Text("Remove") }
+        TextButton(onClick = onRemove, enabled = enabled) { Text("Remove") }
     }
 }

@@ -340,7 +340,7 @@ fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) 
         }
     }, confirmButton = {
         TextButton(onClick = {
-            if (iconUri.isNotBlank() && runCatching {
+            if (iconUri.startsWith("content://") && runCatching {
                 context.contentResolver.takePersistableUriPermission(android.net.Uri.parse(iconUri), Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }.isFailure) {
                 SystemActions.error(context, "Cannot retain access to this image. Choose another image.")

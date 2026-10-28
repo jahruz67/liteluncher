@@ -79,7 +79,7 @@ private fun GestureSetting(
     val app = apps.firstOrNull { it.key == binding.target }
     val description = when (binding.action) {
         Action.APP -> app?.label ?: "Unavailable app · choose another app"
-        Action.SHORTCUT -> "${app?.label ?: "Unavailable app"} · ${binding.shortcutId}"
+        Action.SHORTCUT -> "${app?.label ?: "Unavailable app"} · ${binding.shortcutLabel.ifBlank { binding.shortcutId }}"
         else -> binding.action.actionLabel()
     }
     SettingsSection(gesture.gestureLabel()) {
@@ -104,6 +104,7 @@ private fun GestureBindingDialog(
     var action by rememberSaveable { mutableStateOf(binding.action) }
     var target by rememberSaveable { mutableStateOf(binding.target) }
     var shortcutId by rememberSaveable { mutableStateOf(binding.shortcutId) }
+    var shortcutLabel by rememberSaveable { mutableStateOf(binding.shortcutLabel) }
     var choosingApp by rememberSaveable { mutableStateOf(false) }
     var choosingShortcut by rememberSaveable { mutableStateOf(false) }
 
@@ -140,7 +141,7 @@ private fun GestureBindingDialog(
                 if (action == Action.SHORTCUT) {
                     val label = apps.firstOrNull { it.key == target }?.label ?: "Choose an app for shortcuts"
                     Button(onClick = { choosingShortcut = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (shortcutId.isBlank()) label else "$label · $shortcutId")
+                        Text(if (shortcutId.isBlank()) label else "$label · ${shortcutLabel.ifBlank { shortcutId }}")
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -155,7 +156,7 @@ private fun GestureBindingDialog(
                             Action.SHORTCUT -> target.isNotBlank() && shortcutId.isNotBlank()
                             else -> true
                         }
-                        if (valid) onSave(GestureBinding(action, target, shortcutId))
+                        if (valid) onSave(GestureBinding(action, target, shortcutId, if (action == Action.SHORTCUT) shortcutLabel else ""))
                     }) { Text("Save") }
                 }
             }
@@ -166,13 +167,15 @@ private fun GestureBindingDialog(
         AppChooserDialog(apps, target, onDismiss = { choosingApp = false }) { selected ->
             target = selected.key
             shortcutId = ""
+            shortcutLabel = ""
             choosingApp = false
         }
     }
     if (choosingShortcut) {
-        AppShortcutChooserDialog(apps, target, onDismiss = { choosingShortcut = false }) { app, shortcut ->
+        AppShortcutChooserDialog(apps, target, onDismiss = { choosingShortcut = false }) { app, shortcut, label ->
             target = app.key
             shortcutId = shortcut
+            shortcutLabel = label
             choosingShortcut = false
         }
     }
@@ -219,7 +222,7 @@ private fun AppShortcutChooserDialog(
     apps: List<AppEntry>,
     selectedAppKey: String,
     onDismiss: () -> Unit,
-    onSelect: (AppEntry, String) -> Unit
+    onSelect: (AppEntry, String, String) -> Unit
 ) {
     var pickedAppKey by rememberSaveable { mutableStateOf(selectedAppKey) }
     val context = LocalContext.current
@@ -256,7 +259,7 @@ private fun AppShortcutChooserDialog(
                         LazyColumn(Modifier.weight(1f)) {
                             items(shortcuts, key = { it.id }) { shortcut ->
                                 Text(shortcut.shortLabel?.toString() ?: shortcut.id,
-                                    modifier = Modifier.fillMaxWidth().clickable { onSelect(selectedApp, shortcut.id) }.padding(vertical = 10.dp))
+                                    modifier = Modifier.fillMaxWidth().clickable { onSelect(selectedApp, shortcut.id, shortcut.shortLabel?.toString() ?: shortcut.id) }.padding(vertical = 10.dp))
                             }
                         }
                     }

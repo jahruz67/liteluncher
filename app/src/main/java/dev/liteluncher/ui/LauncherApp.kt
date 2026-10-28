@@ -144,7 +144,12 @@ fun LauncherApp(
             if (query.isNotBlank()) model.store.addHistory(query)
             query = ""
             folder = null
-            if (state.prefs.behavior.returnHome) manager.navigate(Screen.HOME, state.prefs.navigation)
+            if (state.prefs.behavior.returnHome) {
+                panel = ""
+                keyboard?.hide()
+                focusManager.clearFocus(force = true)
+                manager.navigate(Screen.HOME, state.prefs.navigation)
+            }
         } else toast("This app is unavailable in the current profile")
     }
     val navigate: (Screen) -> Unit = { screen ->
@@ -163,7 +168,7 @@ fun LauncherApp(
             if (query.isNotBlank()) model.store.addHistory(query)
             query = ""
             folder = null
-            if (state.prefs.behavior.returnHome) navigate(Screen.HOME)
+            if (state.prefs.behavior.returnHome) { panel = ""; navigate(Screen.HOME) }
         }
         launched
     }
@@ -375,11 +380,16 @@ fun LauncherApp(
     LaunchedEffect(ready, state.shortcuts) {
         if (ready) withContext(Dispatchers.IO) { model.apps.syncShortcutPins(state.shortcuts) }
     }
+    var previousIconUris by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(ready, state.overrides, state.folders) {
-        if (ready) withContext(Dispatchers.IO) {
+        if (ready) {
             val used = state.overrides.values.map { it.iconUri }.toSet() + state.folders.map { it.iconUri }
-            context.contentResolver.persistedUriPermissions.filter { it.uri.toString() !in used }.forEach { permission ->
-                runCatching { context.contentResolver.releasePersistableUriPermission(permission.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            val obsolete = previousIconUris - used
+            previousIconUris = used
+            withContext(Dispatchers.IO) {
+                obsolete.filter { it.startsWith("content://") }.forEach { uri ->
+                    runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                }
             }
         }
     }
@@ -552,7 +562,7 @@ fun LauncherApp(
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
                             // Clip each workspace page while it moves through the pager.
                             Box(Modifier.fillMaxSize().graphicsLayer { clip = true }
-                                .then(if (state.prefs.behavior.borders && pager.isScrollInProgress) Modifier.border(1.dp, MaterialTheme.colorScheme.outline) else Modifier)) {
+                                .then(if (state.prefs.behavior.borders && (pager.isScrollInProgress || screen != manager.current)) Modifier.border(1.dp, MaterialTheme.colorScheme.outline) else Modifier)) {
                                 when (screen) {
                                     Screen.HOME -> HomeScreen(
                                         state = state,
@@ -633,7 +643,7 @@ fun LauncherApp(
                                                     state.pendingWidgets.filter { it.page == currentDesktopPage }.forEach { item ->
                                                         key(item.key) {
                                                             PendingWidgetTile(item, widgets, Modifier.offset(x = cellWidth * item.column, y = cellHeight * item.row)
-                                                                .width(cellWidth * item.columns).height(cellHeight * item.rows)) {
+                                                                .width(cellWidth * item.columns).height(cellHeight * item.rows), enabled = !state.prefs.desktop.preventChanges) {
                                                                 model.store.update { current -> if (current.prefs.desktop.preventChanges) current else current.copy(pendingWidgets = current.pendingWidgets.filterNot { it.key == item.key }) }
                                                             }
                                                         }
@@ -805,6 +815,17 @@ fun LauncherApp(
 
             }
             }
+                if (state.prefs.appearance.customBarColor) {
+                    val nav = WindowInsets.navigationBars.asPaddingValues()
+                    val direction = androidx.compose.ui.platform.LocalLayoutDirection.current
+                    val navColor = parseColor(state.prefs.appearance.navigationColor, Color.Transparent)
+                    Box(Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                        .height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
+                        .background(parseColor(state.prefs.appearance.statusColor, Color.Transparent)))
+                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(nav.calculateBottomPadding()).background(navColor))
+                    Box(Modifier.align(Alignment.CenterStart).fillMaxHeight().width(nav.calculateStartPadding(direction)).background(navColor))
+                    Box(Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(nav.calculateEndPadding(direction)).background(navColor))
+                }
             }
         }
         }
@@ -824,10 +845,12 @@ internal fun FloatingDock(
     val prefs = state.prefs.dock
     var idleHidden by remember { mutableStateOf(false) }
     var interaction by remember { mutableIntStateOf(0) }
+    var touching by remember { mutableStateOf(false) }
     val accessibility = LocalAccessibilityManager.current
-    LaunchedEffect(prefs.autoHide, interaction, scrolling, LocalAppDrag.current?.active) {
+    val dragging = LocalAppDrag.current?.active != null
+    LaunchedEffect(prefs.autoHide, interaction, scrolling, dragging, touching) {
         idleHidden = false
-        if (prefs.autoHide && !scrolling) {
+        if (prefs.autoHide && !scrolling && !dragging && !touching) {
             delay(accessibility?.calculateRecommendedTimeoutMillis(3000L, containsControls = true) ?: 3000L)
             idleHidden = true
         }
@@ -852,7 +875,10 @@ internal fun FloatingDock(
         else RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
     BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth).windowInsetsPadding(WindowInsets.safeDrawing)
         .pointerInput(Unit) {
-            awaitPointerEventScope { while (true) { awaitPointerEvent(); interaction++ } }
+            awaitPointerEventScope { while (true) {
+                touching = awaitPointerEvent().changes.any { it.pressed }
+                interaction++
+            } }
         }
         .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)) {
         val positionedDock = state.positions.any { it.container == "dock" }

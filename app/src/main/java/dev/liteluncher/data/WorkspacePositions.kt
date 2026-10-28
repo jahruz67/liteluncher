@@ -1,5 +1,10 @@
 package dev.liteluncher.data
 
+internal val LauncherState.minimumDesktopPages: Int get() = ((desktopApps.filterValues { it.isNotEmpty() }.keys +
+    widgets.map { it.page } + pendingWidgets.map { it.page } + shortcuts.mapNotNull {
+        it.container.takeIf { name -> name.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull()
+    }).filter { it in 0..15 }.maxOrNull() ?: 0) + 1
+
 internal fun LauncherState.desktopObstacles(exceptRestoreKey: String = ""): List<WidgetItem> =
     (0 until prefs.desktop.pageCount).flatMap { page ->
         workspacePositions("desktop:$page", prefs.desktop.columns, prefs.desktop.rows).mapIndexed { index, p ->

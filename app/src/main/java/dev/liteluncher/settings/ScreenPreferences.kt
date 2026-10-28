@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.AppEntry
@@ -188,10 +190,10 @@ private fun SearchTargetsSetting(prefs: SearchPrefs, update: ((SearchPrefs) -> S
             Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(prefs.checked(target), { v -> update { it.check(target, v) } })
                 Text(target.title, Modifier.weight(1f))
-                TextButton(enabled = prefs.targetOrder.first() != target, onClick = {
+                TextButton(modifier = Modifier.semantics { contentDescription = "Move ${target.title} up" }, enabled = prefs.targetOrder.first() != target, onClick = {
                     update { it.copy(targetOrder = it.targetOrder.moveLayoutItem(it.targetOrder.indexOf(target), it.targetOrder.indexOf(target) - 1)) }
                 }) { Text("↑") }
-                TextButton(enabled = prefs.targetOrder.last() != target, onClick = {
+                TextButton(modifier = Modifier.semantics { contentDescription = "Move ${target.title} down" }, enabled = prefs.targetOrder.last() != target, onClick = {
                     update { it.copy(targetOrder = it.targetOrder.moveLayoutItem(it.targetOrder.indexOf(target), it.targetOrder.indexOf(target) + 1)) }
                 }) { Text("↓") }
                 Icon(Icons.Rounded.DragHandle, "Drag to reorder ${target.title}", Modifier.size(40.dp).pointerInput(target) {
