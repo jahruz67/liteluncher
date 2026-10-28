@@ -495,6 +495,7 @@ fun LauncherApp(
                     val navigationRevision = manager.navigationRevision
                     var completedNavigation by remember { mutableStateOf<Pair<Long, List<Screen>>?>(null) }
                     var workspacePointerCount by remember { mutableIntStateOf(0) }
+                    var pagerHandledGesture by remember { mutableStateOf(false) }
                     LaunchedEffect(navigationRevision, horizontalScreens, horizontalPaging) {
                         completedNavigation = null
                         if (!horizontalPaging) return@LaunchedEffect
@@ -532,6 +533,10 @@ fun LauncherApp(
                         fingers = state.prefs.navigation.fingers,
                         home = manager.current == Screen.HOME,
                         onPointerCountChange = { count ->
+                            if (count > 0) {
+                                if (workspacePointerCount == 0) pagerHandledGesture = false
+                                pagerHandledGesture = pagerHandledGesture || pager.isScrollInProgress
+                            }
                             if (count >= 2) drag.cancel()
                             if (count >= 2 && workspacePointerCount < 2 && swipeWithPager && manager.current in horizontalScreens) {
                                 manager.navigate(manager.current, state.prefs.navigation)
@@ -539,7 +544,7 @@ fun LauncherApp(
                             workspacePointerCount = count
                         },
                         onSwipe = swipe@{ direction, fingers ->
-                            if (fingers == 1 && swipeWithPager && manager.current in horizontalScreens &&
+                            if (fingers == 1 && swipeWithPager && pagerHandledGesture && manager.current in horizontalScreens &&
                                 (direction == Direction.LEFT || direction == Direction.RIGHT)) return@swipe
                             val gesture = when (direction) {
                                 Direction.UP -> if (fingers >= 2) Gesture.TWO_UP else Gesture.SWIPE_UP
