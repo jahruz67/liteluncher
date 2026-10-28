@@ -32,6 +32,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -69,6 +70,7 @@ fun WidgetCanvas(
     val refreshes by controller.refreshes.collectAsState()
     val providerChanges by controller.providerChanges.collectAsState()
     val configuration = LocalConfiguration.current
+    val layoutDirection = LocalLayoutDirection.current
     var contextMenuWidget by remember(isActive) { mutableStateOf<Int?>(null) }
     var resizingWidgetId by remember(isActive) { mutableStateOf<Int?>(null) }
     var draft by remember(isActive) { mutableStateOf<WidgetItem?>(null) }
@@ -93,18 +95,6 @@ fun WidgetCanvas(
 
     val padding = if (prefs.grid.borderPadding == "Default") prefs.padding else prefs.grid.borderPaddingDp
     Column(modifier.fillMaxSize().padding(padding.coerceIn(0, 64).dp)) {
-        if (layout.overflow.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
-                Text("Some widgets do not fit this grid. Increase the grid or free space.", style = MaterialTheme.typography.bodySmall)
-                layout.overflow.forEach { item ->
-                    Box {
-                        TextButton(onClick = { contextMenuWidget = item.id }) { Text("Manage widget ${item.id}") }
-                        WidgetContextMenu(contextMenuWidget == item.id, false, !prefs.preventChanges, {},
-                            { controller.refresh(item.id); contextMenuWidget = null }, { remove(item) }, { contextMenuWidget = null })
-                    }
-                }
-            }
-        }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).onGloballyPositioned { onCanvasBounds(it.boundsInRoot()) }) {
             val canvasHeight = if (constraints.hasBoundedHeight) maxHeight else 640.dp
             val canvasWidth = if (constraints.hasBoundedWidth) maxWidth else 360.dp
@@ -113,6 +103,31 @@ fun WidgetCanvas(
             val gutter = if (prefs.widgetPadding) 8.dp else 0.dp
             SideEffect { controller.syncGeometry(prefs, canvasWidth.value, canvasHeight.value) }
             overlay()
+            if (layout.overflow.isNotEmpty()) Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                .heightIn(max = 144.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = .92f))
+                .verticalScroll(rememberScrollState())) {
+                Text("Some widgets do not fit this grid. Increase the grid or free space.", style = MaterialTheme.typography.bodySmall)
+                layout.overflow.forEach { item ->
+                    Box {
+                        TextButton(onClick = { contextMenuWidget = item.id }) { Text("Manage widget ${item.id}") }
+                        WidgetContextMenu(contextMenuWidget == item.id, !prefs.preventChanges, !prefs.preventChanges, {
+                            val info = controller.provider(item.id)
+                            val minimum = info?.let { controller.minimumSpan(it) } ?: return@WidgetContextMenu
+                            val smaller = item.copy(columns = minimum.first, rows = minimum.second, column = 0, row = 0)
+                            val candidate = WidgetGrid.place(smaller, layout.placed + blocked, columns, rows)
+                            if (candidate != null) currentChange(currentItems.map { if (it.id == item.id) candidate else it })
+                            contextMenuWidget = null
+                        }, { controller.refresh(item.id); contextMenuWidget = null }, { remove(item) }, { contextMenuWidget = null },
+                            onPreviousPage = if (item.page > 0) ({ controller.moveToPage(item, item.page - 1)?.let { moved ->
+                                currentChange(currentItems.map { if (it.id == item.id) moved else it })
+                            }; contextMenuWidget = null }) else null,
+                            onNextPage = if (item.page + 1 < prefs.pageCount) ({ controller.moveToPage(item, item.page + 1)?.let { moved ->
+                                currentChange(currentItems.map { if (it.id == item.id) moved else it })
+                            }; contextMenuWidget = null }) else null
+                        )
+                    }
+                }
+            }
 
             // Behind the widgets, so dismissing the selection cannot swallow the handles.
             if (resizingWidgetId != null) {
@@ -166,12 +181,18 @@ fun WidgetCanvas(
                         WidgetContextMenu(contextMenuWidget == item.id,
                             !prefs.preventChanges, !prefs.preventChanges,
                             { resizingWidgetId = item.id; contextMenuWidget = null },
-                            { controller.refresh(item.id); contextMenuWidget = null }, { remove(item) }, { contextMenuWidget = null })
+                            { controller.refresh(item.id); contextMenuWidget = null }, { remove(item) }, { contextMenuWidget = null },
+                            onPreviousPage = if (item.page > 0) ({ controller.moveToPage(item, item.page - 1)?.let { moved ->
+                                currentChange(currentItems.map { if (it.id == item.id) moved else it })
+                            }; contextMenuWidget = null }) else null,
+                            onNextPage = if (item.page + 1 < prefs.pageCount) ({ controller.moveToPage(item, item.page + 1)?.let { moved ->
+                                currentChange(currentItems.map { if (it.id == item.id) moved else it })
+                            }; contextMenuWidget = null }) else null)
 
                         if (isResizing) {
                             val provider = remember(controller, item.id, providerChanges, configuration) { controller.provider(item.id) }
                             val resizeMode = provider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_NONE
-                            val minSpan = remember(controller, provider, cellWidth, cellHeight) {
+                            val minSpan = remember(controller, provider, cellWidth, cellHeight, prefs.widgetPadding) {
                                 provider?.let { controller.minimumSpan(it, cellWidth.value, cellHeight.value) } ?: (1 to 1)
                             }
                             val maxSpan = remember(controller, provider, columns, rows, cellWidth, cellHeight) {
@@ -179,7 +200,7 @@ fun WidgetCanvas(
                                     ?: (columns to rows)
                             }
                             // Capture the drag on top of the native widget; ordinary widget touches stay native outside edit mode.
-                            Box(Modifier.fillMaxSize().widgetGridDrag(item, cellWidth.value, cellHeight.value,
+                            Box(Modifier.fillMaxSize().widgetGridDrag(item, cellWidth.value, cellHeight.value, layoutDirection,
                                 onPreview = { origin, delta ->
                                     val candidate = origin.copy(
                                         column = (origin.column + delta.first).coerceIn(0, columns - origin.columns),
@@ -205,7 +226,7 @@ fun WidgetCanvas(
                                     .offset(x = when (edge) { ResizeEdge.LEFT -> (-16).dp; ResizeEdge.RIGHT -> 16.dp; else -> 0.dp },
                                         y = when (edge) { ResizeEdge.TOP -> (-16).dp; ResizeEdge.BOTTOM -> 16.dp; else -> 0.dp })
                                     .size(32.dp)
-                                    .widgetGridDrag(item, cellWidth.value, cellHeight.value,
+                                    .widgetGridDrag(item, cellWidth.value, cellHeight.value, layoutDirection,
                                         onPreview = { origin, delta ->
                                             val candidate = resizeWidget(origin, edge, delta, minSpan, maxSpan, columns, rows)
                                             if (candidate != null && WidgetGrid.fits(candidate, layout.placed + blocked, columns, rows)) draft = candidate
@@ -244,14 +265,14 @@ private fun resizeWidget(
 
 @Composable
 private fun Modifier.widgetGridDrag(
-    item: WidgetItem, cellWidthDp: Float, cellHeightDp: Float,
+    item: WidgetItem, cellWidthDp: Float, cellHeightDp: Float, layoutDirection: androidx.compose.ui.unit.LayoutDirection,
     onPreview: (WidgetItem, Pair<Int, Int>) -> Unit, onCommit: () -> Unit, onCancel: () -> Unit
 ): Modifier {
     val latestItem by rememberUpdatedState(item)
     val preview by rememberUpdatedState(onPreview)
     val commit by rememberUpdatedState(onCommit)
     val cancel by rememberUpdatedState(onCancel)
-    return pointerInput(item.id, cellWidthDp, cellHeightDp) {
+    return pointerInput(item.id, cellWidthDp, cellHeightDp, layoutDirection) {
         var origin = latestItem
         var distance = Offset.Zero
         detectDragGestures(
@@ -260,7 +281,8 @@ private fun Modifier.widgetGridDrag(
             onDrag = { change, amount ->
                 change.consume()
                 distance += amount
-                preview(origin, (distance.x / (cellWidthDp * density)).roundToInt() to
+                val horizontalDistance = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) -distance.x else distance.x
+                preview(origin, (horizontalDistance / (cellWidthDp * density)).roundToInt() to
                     (distance.y / (cellHeightDp * density)).roundToInt())
             }
         )
@@ -270,13 +292,18 @@ private fun Modifier.widgetGridDrag(
 @Composable
 private fun WidgetContextMenu(
     expanded: Boolean, canEdit: Boolean, canRemove: Boolean,
-    onResize: () -> Unit, onRefresh: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit
+    onResize: () -> Unit, onRefresh: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit,
+    onPreviousPage: (() -> Unit)? = null, onNextPage: (() -> Unit)? = null
 ) {
     DropdownMenu(expanded, onDismiss, containerColor = Color(0xFF253238)) {
         DropdownMenuItem(text = { Text("Move / resize", color = Color.White) }, onClick = onResize, enabled = canEdit,
             leadingIcon = { Icon(Icons.Rounded.AspectRatio, null, tint = Color.White) })
         DropdownMenuItem(text = { Text("Refresh", color = Color.White) }, onClick = onRefresh,
             leadingIcon = { Icon(Icons.Rounded.Refresh, null, tint = Color.White) })
+        onPreviousPage?.let { action -> DropdownMenuItem(text = { Text("Move to previous page", color = Color.White) }, onClick = action,
+            leadingIcon = { Icon(Icons.Rounded.ChevronLeft, null, tint = Color.White) }) }
+        onNextPage?.let { action -> DropdownMenuItem(text = { Text("Move to next page", color = Color.White) }, onClick = action,
+            leadingIcon = { Icon(Icons.Rounded.ChevronRight, null, tint = Color.White) }) }
         DropdownMenuItem(text = { Text("Remove", color = Color.White) }, onClick = onRemove, enabled = canRemove,
             leadingIcon = { Icon(Icons.Rounded.Close, null, tint = Color.White) })
     }

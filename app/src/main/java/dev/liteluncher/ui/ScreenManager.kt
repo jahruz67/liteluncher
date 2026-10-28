@@ -27,12 +27,14 @@ class ScreenManager(initial: Screen = Screen.HOME) {
     var navigationRevision by mutableLongStateOf(0L)
         private set
 
-    fun navigate(screen: Screen, prefs: NavigationPrefs) {
+    fun navigate(screen: Screen, prefs: NavigationPrefs): Boolean {
         if (screen == Screen.HOME || screen in prefs.enabledScreens) {
             current = screen
             // Repeating Home must also cancel a swipe that has not settled yet.
             navigationRevision++
+            return true
         }
+        return false
     }
 
     fun onPageSettled(screen: Screen, prefs: NavigationPrefs) {
@@ -76,6 +78,7 @@ fun Modifier.launcherGestures(
             var displacement = Offset.Zero
             var pointerCount = 1
             var consumed = false
+            var swipePointers = 1
             var firstSpan = 0f
             var lastSpan = 0f
             var finished = false
@@ -88,7 +91,11 @@ fun Modifier.launcherGestures(
                     pointerCountAction(pointerCount)
                     event.changes.firstOrNull { it.id == down.id }?.let {
                         displacement = it.position - start
-                        // Click handlers consume release events; only held movement claims a drag.
+                    }
+                    if (pressed.isNotEmpty() && maxOf(abs(displacement.x), abs(displacement.y)) > viewConfiguration.touchSlop) {
+                        swipePointers = pressed.size
+                    }
+                    event.changes.forEach {
                         if (it.pressed && it.previousPressed && it.position != it.previousPosition) {
                             consumed = consumed || it.isConsumed
                         }
@@ -106,13 +113,13 @@ fun Modifier.launcherGestures(
             val verticalHomeSwipe = home && abs(displacement.y) > abs(displacement.x)
             val swipeThreshold = if (verticalHomeSwipe) maxOf(48 * density, viewConfiguration.touchSlop * 2) else 68 * density
             when {
-                pinch && home && (!consumed || pointerCount >= 2) -> pinchAction(lastSpan < firstSpan)
-                pointerCount >= fingers && (!consumed || pointerCount >= 2) &&
+                pinch && home && !consumed -> pinchAction(lastSpan < firstSpan)
+                !consumed &&
                     maxOf(abs(displacement.x), abs(displacement.y)) > swipeThreshold -> {
                     val direction = if (abs(displacement.x) > abs(displacement.y)) {
                         if (displacement.x < 0) Direction.LEFT else Direction.RIGHT
                     } else if (displacement.y < 0) Direction.UP else Direction.DOWN
-                    swipeAction(direction, pointerCount)
+                    swipeAction(direction, swipePointers)
                 }
             }
         }

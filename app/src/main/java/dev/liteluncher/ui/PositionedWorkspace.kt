@@ -135,7 +135,7 @@ internal fun WorkspaceEntry(key: String, container: String, state: LauncherState
         folder != null -> FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, container == "dock") },
             { actions.folderActions(folder) }, modifier, container)
         shortcut != null -> ShortcutTile(shortcut, state, apps, repository, prefs, actions, modifier, onLaunch)
-        app != null -> AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { actions.launch(app); onLaunch() },
+        app != null -> AppTile(app, repository, state, prefs, badges[app.badgeKey] ?: 0, { if (actions.launch(app)) onLaunch() },
             { if (container == "dock") actions.dockMenu(app) else actions.menu(app) }, modifier,
             draggable = !locked,
             dragArea = area, dragFolderId = container.takeIf { it.startsWith("folder:") }?.substringAfter(':'),
@@ -157,7 +157,7 @@ internal fun PositionedWorkspace(container: String, state: LauncherState, apps: 
                 if (app != null) AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs,
                     draggable = container == "home" && !state.prefs.home.preventChanges,
                     dragArea = if (container == "home") LayoutArea.HOME else null)
-                else WorkspaceEntry(key, container, state, apps, repository, prefs, badges, actions, Modifier.fillMaxWidth().height(88.dp))
+                else WorkspaceListEntry(key, container, state, apps, repository, actions)
             }
         }
         return
@@ -186,6 +186,53 @@ internal fun PositionedWorkspace(container: String, state: LauncherState, apps: 
             Text("Entries outside the grid", style = MaterialTheme.typography.labelSmall)
             overflow.forEach { key -> WorkspaceEntry(key, container, state, apps, repository, prefs.copy(iconScale = .5f, labels = true), badges, actions, Modifier.fillMaxWidth().height(76.dp)) }
         }
+    }
+}
+
+@Composable
+private fun WorkspaceListEntry(key: String, container: String, state: LauncherState, apps: List<AppEntry>,
+    repository: AppsRepository, actions: WorkspaceActions) {
+    val context = LocalContext.current
+    val folder = state.folders.find { key == "folder:${it.id}" }
+    val shortcut = state.shortcuts.find { it.layoutKey == key && it.container == container }
+    when {
+        folder != null -> {
+            val area = if (container == "dock") LayoutArea.DOCK else LayoutArea.HOME
+            val representative = apps.firstOrNull { it.key in folder.apps } ?: AppEntry("folder:${folder.id}", context.packageName,
+                folder.name, android.content.ComponentName(context, dev.liteluncher.MainActivity::class.java), android.os.Process.myUserHandle())
+            Row(Modifier.fillMaxWidth().height(72.dp).appDropTarget(AppDropTarget.Folder(folder.id), 3)
+                .appIconGestures(representative, area, !state.folderLocked(folder.id),
+                    { actions.folder(folder, container == "dock") }, { actions.folderActions(folder) }, movingFolderId = folder.id)
+                .semantics { contentDescription = folder.name }, verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Folder, null, Modifier.size(40.dp).padding(4.dp), tint = MaterialTheme.colorScheme.primary)
+                Text(folder.name, Modifier.weight(1f).padding(start = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        shortcut != null -> {
+            val icon = rememberBackupBitmap(shortcut.backupIcon)
+            val app = apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
+            val locked = if (container == "dock") state.prefs.dock.preventChanges else state.prefs.home.preventChanges
+            Row(Modifier.fillMaxWidth().height(72.dp).semantics { contentDescription = shortcut.label }.combinedClickable(onClick = {
+                val user = app?.user ?: context.getSystemService(UserManager::class.java)?.getUserForSerialNumber(shortcut.userSerial)
+                if (user == null) SystemActions.error(context, "This shortcut's profile is unavailable")
+                else actions.shortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
+            }, onLongClick = {
+                if (!locked) actions.update { current -> current.copy(shortcuts = current.shortcuts.filterNot {
+                    it.layoutKey == shortcut.layoutKey && it.container == shortcut.container
+                }) }
+            }), verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    icon != null -> Image(icon.asImageBitmap(), null, Modifier.size(40.dp), contentScale = ContentScale.Fit)
+                    app != null -> AppIcon(app, repository, state, 40)
+                    else -> Icon(Icons.Rounded.Shortcut, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+                Text(shortcut.label, Modifier.weight(1f).padding(start = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        else -> WorkspaceEntry(key, container, state, apps, repository, state.prefs.home, emptyMap(), actions,
+            Modifier.fillMaxWidth().height(72.dp))
     }
 }
 

@@ -23,17 +23,34 @@ fun parseColor(value: String, fallback: Color = Cerulean): Color = runCatching {
 
 @Composable
 fun LauncherTheme(prefs: AppearancePrefs, content: @Composable () -> Unit) {
-    val dark = when (prefs.mode) {
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
-        ThemeMode.LIGHT -> false
-        else -> true
-    }
     val accent = parseColor(prefs.accent)
+    val colorScheme = when (prefs.mode) {
+        ThemeMode.LIGHT -> lightColorScheme(
+            primary = accent, onPrimary = contrastContent(accent), background = Color(0xFFF2F2F2),
+            surface = Color(0xFFFAFAFA), onSurface = Ink, surfaceVariant = Color(0xFFE0E0E0)
+        )
+        ThemeMode.SYSTEM -> if (isSystemInDarkTheme()) {
+            darkColorScheme(
+                primary = accent, onPrimary = contrastContent(accent), background = Ink, surface = Panel,
+                onBackground = Mist, onSurface = Mist, surfaceVariant = Color(0xFF484848), onSurfaceVariant = Muted
+            )
+        } else {
+            lightColorScheme(
+                primary = accent, onPrimary = contrastContent(accent), background = Color(0xFFF2F2F2),
+                surface = Color(0xFFFAFAFA), onSurface = Ink, surfaceVariant = Color(0xFFE0E0E0)
+            )
+        }
+        ThemeMode.ADVANCED -> darkColorScheme(
+            primary = accent, onPrimary = contrastContent(accent), background = Color.Black, surface = Color(0xFF141414),
+            onBackground = Color.White, onSurface = Color.White, surfaceVariant = Color(0xFF222222), onSurfaceVariant = Color(0xFFCCCCCC)
+        )
+        ThemeMode.DARK -> darkColorScheme(
+            primary = accent, onPrimary = contrastContent(accent), background = Ink, surface = Panel,
+            onBackground = Mist, onSurface = Mist, surfaceVariant = Color(0xFF484848), onSurfaceVariant = Muted
+        )
+    }
     MaterialTheme(
-        colorScheme = if (dark) darkColorScheme(primary = accent, onPrimary = contrastContent(accent), background = Ink, surface = Panel,
-            onBackground = Mist, onSurface = Mist, surfaceVariant = Color(0xFF484848), onSurfaceVariant = Muted)
-        else lightColorScheme(primary = accent, onPrimary = contrastContent(accent), background = Color(0xFFF2F2F2),
-            surface = Color(0xFFFAFAFA), onSurface = Ink, surfaceVariant = Color(0xFFE0E0E0)),
+        colorScheme = colorScheme,
         content = content
     )
 }

@@ -44,6 +44,7 @@ class LauncherStore(context: Context) {
     private val mutableState = MutableStateFlow(LauncherState())
     private val mutableReady = MutableStateFlow(false)
     private val mutableError = MutableStateFlow<String?>(null)
+    private var recoveryNotice: String? = null
     // Accessed only by the command worker; raw JSON remains the transaction's source of truth.
     private var cachedSnapshot: Pair<String, LauncherState>? = null
 
@@ -241,7 +242,7 @@ class LauncherStore(context: Context) {
         cachedSnapshot = checkNotNull(committedJson) to next
         mutableState.value = next
         mutableReady.value = true
-        mutableError.value = null
+        mutableError.value = recoveryNotice
     }
 
     private fun decodeStored(raw: String?): LauncherState {
@@ -265,6 +266,7 @@ class LauncherStore(context: Context) {
                     throw error
                 }
             }
+            recoveryNotice = "Corrupted layout data was recovered. Defaults restored; archived to ${recovery.name}."
             LauncherState()
         }
     }

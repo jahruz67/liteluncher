@@ -38,7 +38,8 @@ import kotlin.math.ceil
  */
 class WidgetController(
     private val activity: ComponentActivity,
-    private val onAdded: (WidgetItem) -> Unit
+    private val onAdded: (WidgetItem, (Boolean) -> Unit) -> Unit,
+    private val onRollbackAdded: (WidgetItem) -> Unit
 ) : AutoCloseable {
     private val manager = AppWidgetManager.getInstance(activity)
     private val users = requireNotNull(activity.getSystemService(UserManager::class.java))
@@ -63,11 +64,13 @@ class WidgetController(
     private var rows = 8
     private var cellWidthDp = 80f
     private var cellHeightDp = 80f
+    private var widgetGutterDp = 0f
     private var layoutItems = emptyList<WidgetItem>()
     private var obstacles = emptyList<WidgetItem>()
     private var locked = false
     private var cachedPlacementLayout: PlacementLayout? = null
     private var currentPage = 0
+    private var pageCount = 1
     private val mutableRefreshes = MutableStateFlow<Map<Int, Int>>(emptyMap())
     internal val refreshes = mutableRefreshes.asStateFlow()
 
@@ -76,7 +79,8 @@ class WidgetController(
         val provider: AppWidgetProviderInfo,
         val stage: String,
         val pin: LauncherApps.PinItemRequest? = null,
-        val location: WidgetItem? = null
+        val location: WidgetItem? = null,
+        val pinOptions: Bundle? = null
     )
 
     private data class PlacementLayout(
@@ -140,6 +144,7 @@ class WidgetController(
                     putParcelable("provider", it.provider)
                     putString("stage", it.stage)
                     putParcelable("pin", it.pin)
+                    putBundle("pinOptions", it.pinOptions)
                     it.location?.let { location ->
                         putIntArray("location", intArrayOf(location.column, location.row, location.page, location.columns, location.rows))
                         putString("restoreKey", location.restoreKey)
@@ -165,7 +170,7 @@ class WidgetController(
         beginAdd(provider, null, location)
     }
 
-    private fun beginAdd(provider: AppWidgetProviderInfo, pin: LauncherApps.PinItemRequest?, location: WidgetItem? = null) {
+    private fun beginAdd(provider: AppWidgetProviderInfo, pin: LauncherApps.PinItemRequest?, location: WidgetItem? = null, pinOptions: Bundle? = null) {
         restorePending()
         if (closed || locked) return
         if (pending != null || pinDialog != null) {
@@ -188,17 +193,18 @@ class WidgetController(
             SystemActions.error(activity, "This device does not support hosting widgets.")
             return
         }
-        pending = Pending(id, provider, BINDING, pin, location ?: WidgetItem(id, page = currentPage))
+        val chosenLocation = location ?: WidgetItem(id, page = currentPage)
+        pending = Pending(id, provider, BINDING, pin, chosenLocation, pinOptions)
         journal.edit().putInt("id", id).apply()
         val bound = runCatching {
-            manager.bindAppWidgetIdIfAllowed(id, provider.profile, provider.provider, widgetOptions())
+            manager.bindAppWidgetIdIfAllowed(id, provider.profile, provider.provider, widgetOptions(pinOptions, chosenLocation))
         }.getOrDefault(false)
         if (bound) configureOrFinish() else {
             val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider.provider)
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER_PROFILE, provider.profile)
-                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, widgetOptions())
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, widgetOptions(pinOptions, chosenLocation))
             if (runCatching { bindLauncher.launch(intent) }.isFailure) {
                 cancelPending()
                 SystemActions.error(activity, "Android's widget binding screen is unavailable.")
@@ -213,13 +219,21 @@ class WidgetController(
             cancelPending()
             return
         }
+        val chosenLocation = placement(current.id, info, current.location)
+        if (chosenLocation == null) {
+            cancelPending()
+            SystemActions.error(activity, "There is no free grid space for this widget.")
+            return
+        }
         if (info.configure == null) {
+            pending = current.copy(provider = info, location = chosenLocation)
             finishAdding()
             return
         }
-        pending = current.copy(provider = info, stage = CONFIGURING)
+        pending = current.copy(provider = info, stage = CONFIGURING, location = chosenLocation)
         if (runCatching {
-            host.startAppWidgetConfigureActivityForResult(activity, current.id, 0, CONFIGURE_REQUEST_CODE, null)
+            host.startAppWidgetConfigureActivityForResult(activity, current.id, 0, CONFIGURE_REQUEST_CODE,
+                widgetOptions(current.pinOptions, current.location))
         }.isFailure) {
             cancelPending()
             SystemActions.error(activity, "This widget's setup activity could not be opened.")
@@ -240,38 +254,54 @@ class WidgetController(
             SystemActions.error(activity, "There is no free grid space for this widget.")
             return
         }
-        if (current.pin != null) {
-            val accepted = runCatching {
-                current.pin.isValid && current.pin.accept(Bundle().apply {
-                    putInt(AppWidgetManager.EXTRA_APPWIDGET_ID, current.id)
-                })
-            }.getOrDefault(false)
-            if (!accepted) {
-                cancelPending()
-                SystemActions.error(activity, "The widget pin request expired or was refused.")
-                return
-            }
-        }
-        // The callback owns persistence; keep the id pending until it has been delivered.
+        // Persist before accepting a third-party request so Add is confirmed only for saved widgets.
         synchronized(additionLock) {
             inFlightAdditions += item.id
             journal.edit().putStringSet("uncommitted",
                 journal.getStringSet("uncommitted", emptySet()).orEmpty() + item.id.toString()).apply()
         }
+        pending = null
+        journal.edit().remove("id").apply()
         try {
-            onAdded(item)
-            layoutItems = layoutItems.filterNot { it.id == item.id } + item
-            pending = null
-            journal.edit().remove("id").apply()
+            onAdded(item) { saved ->
+                if (!saved) {
+                    runCatching { host.deleteAppWidgetId(item.id) }
+                    finishAddition(item.id, saved = false)
+                    return@onAdded
+                }
+                val accepted = current.pin?.let { request -> runCatching {
+                    val options = widgetOptions(current.pinOptions, item).apply {
+                        putInt(AppWidgetManager.EXTRA_APPWIDGET_ID, current.id)
+                    }
+                    request.isValid && request.accept(options)
+                }.getOrDefault(false) } ?: true
+                if (!accepted) {
+                    runCatching { onRollbackAdded(item) }
+                    runCatching { host.deleteAppWidgetId(item.id) }
+                    finishAddition(item.id, saved = false)
+                    SystemActions.error(activity, "The widget pin request expired or was refused.")
+                    return@onAdded
+                }
+                layoutItems = layoutItems.filterNot { it.id == item.id } + item
+                finishAddition(item.id)
+            }
         } catch (error: Exception) {
-            cancelPending()
+            runCatching { host.deleteAppWidgetId(item.id) }
             finishAddition(item.id, saved = false)
             SystemActions.error(activity, "The widget could not be saved.")
         }
     }
 
-    private fun widgetOptions() = Bundle().apply {
+    private fun widgetOptions(requested: Bundle? = null, location: WidgetItem? = null) = Bundle(requested ?: Bundle()).apply {
         putInt(AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY, AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN)
+        location?.let {
+            val width = (it.columns * cellWidthDp - widgetGutterDp * 2).toInt().coerceAtLeast(1)
+            val height = (it.rows * cellHeightDp - widgetGutterDp * 2).toInt().coerceAtLeast(1)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, width)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, width)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, height)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, height)
+        }
     }
 
     private fun profileAvailable(provider: AppWidgetProviderInfo) = runCatching {
@@ -336,8 +366,8 @@ class WidgetController(
         val padding = defaultPadding(info)
         val width = if (info.resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL != 0 && info.minResizeWidth > 0) info.minResizeWidth else info.minWidth
         val height = if (info.resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL != 0 && info.minResizeHeight > 0) info.minResizeHeight else info.minHeight
-        return ceil((width + padding.left + padding.right) / density / widthDp).toInt().coerceAtLeast(1) to
-            ceil((height + padding.top + padding.bottom) / density / heightDp).toInt().coerceAtLeast(1)
+        return ceil(((width + padding.left + padding.right) / density + widgetGutterDp * 2) / widthDp).toInt().coerceAtLeast(1) to
+            ceil(((height + padding.top + padding.bottom) / density + widgetGutterDp * 2) / heightDp).toInt().coerceAtLeast(1)
     }
 
     internal fun maximumSpan(
@@ -367,11 +397,20 @@ class WidgetController(
         rows = prefs.rows.coerceIn(1, 32)
         layoutItems = widgets.distinctBy { it.id }
         currentPage = page.coerceIn(0, prefs.pageCount.coerceAtLeast(1) - 1)
+        pageCount = prefs.pageCount.coerceAtLeast(1)
+    }
+
+    internal fun moveToPage(item: WidgetItem, page: Int): WidgetItem? {
+        if (page !in 0 until pageCount || locked) return null
+        val occupied = WidgetGrid.arrange(layoutItems.filter { it.id != item.id && it.page == page }, columns, rows,
+            obstacles.filter { it.page == page }).placed + obstacles.filter { it.page == page }
+        return WidgetGrid.place(item.copy(page = page, column = 0, row = 0), occupied, columns, rows)
     }
 
     internal fun syncGeometry(prefs: DesktopPrefs, widthDp: Float, heightDp: Float) {
         cellWidthDp = (widthDp / prefs.columns.coerceIn(1, 24)).coerceAtLeast(1f)
         cellHeightDp = (heightDp / prefs.rows.coerceIn(1, 32)).coerceAtLeast(1f)
+        widgetGutterDp = if (prefs.widgetPadding) 8f else 0f
     }
 
     internal fun provider(id: Int): AppWidgetProviderInfo? = runCatching {
@@ -393,7 +432,21 @@ class WidgetController(
         // Recreate the host view to reload Android's most recent RemoteViews, and ask the
         // provider to refresh its data. Providers may apply their own refresh throttling.
         mutableRefreshes.value = mutableRefreshes.value + (id to ((mutableRefreshes.value[id] ?: 0) + 1))
-        if (info == null) return
+        if (info == null) {
+            val savedProvider = layoutItems.firstOrNull { it.id == id }?.provider
+                ?.let(ComponentName::unflattenFromString)
+            val installed = savedProvider?.let { component -> providers().firstOrNull { it.provider == component } }
+            if (installed == null) {
+                SystemActions.error(activity, "Install the widget's app before reconnecting it.")
+                return
+            }
+            val rebound = runCatching {
+                manager.bindAppWidgetIdIfAllowed(id, installed.profile, installed.provider, widgetOptions(location = layoutItems.first { it.id == id }))
+            }.getOrDefault(false)
+            if (rebound) mutableProviderChanges.value += 1
+            else SystemActions.error(activity, "Android could not reconnect this widget. Remove it and add it again.")
+            return
+        }
         val exported = runCatching { activity.packageManager.getReceiverInfo(info.provider, 0).exported }.getOrDefault(false)
         if (!exported) {
             SystemActions.error(activity, "Widget view reloaded. Its app controls when fresh data is available.")
@@ -459,7 +512,6 @@ class WidgetController(
             SystemActions.error(activity, "Android could not start widget updates.")
             false
         }
-        if (listening) mutableProviderChanges.value += 1
     }
 
     fun stop() {
@@ -526,9 +578,14 @@ class WidgetController(
                     SystemActions.error(activity, "This widget is unavailable in the current profile.")
                     return true
                 }
+                if (locked) {
+                    SystemActions.error(activity, "Desktop is locked. Unlock it before adding a widget.")
+                    return true
+                }
                 val label = runCatching { provider.loadLabel(activity.packageManager) }.getOrDefault(provider.provider.packageName)
                 showPinDialog(request, "Add widget?", "$label\n${provider.provider.packageName}") {
-                    if (runCatching { request.isValid }.getOrDefault(false)) beginAdd(provider, request)
+                    if (runCatching { request.isValid }.getOrDefault(false)) beginAdd(provider, request,
+                        pinOptions = intent.getBundleExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS))
                     else SystemActions.error(activity, "The widget pin request expired.")
                 }
             }
@@ -588,7 +645,7 @@ class WidgetController(
                 WidgetItem(id, column = it[0], row = it[1], page = it[2], columns = it.getOrElse(3) { 4 }, rows = it.getOrElse(4) { 2 },
                     provider = info.provider.flattenToString(), restoreKey = bundle.getString("restoreKey").orEmpty())
             }
-            pending = Pending(id, info, requireNotNull(stage), pin, location)
+            pending = Pending(id, info, requireNotNull(stage), pin, location, bundle.getBundle("pinOptions"))
         }
         // Confirmed widgets belong exclusively to Pending. Only an unaccepted, still-valid
         // confirmation is eligible for redisplay when acceptPin supplies a fresh callback.

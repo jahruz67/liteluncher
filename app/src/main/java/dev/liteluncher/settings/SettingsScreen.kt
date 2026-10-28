@@ -335,10 +335,14 @@ private fun LazyListScope.hiddenAppSettings(
     onQuery: (String) -> Unit,
     onUpdate: ((LauncherState) -> LauncherState) -> Unit
 ) {
+    val installed = apps.distinctBy { it.key }.sortedBy { it.label.lowercase(Locale.ROOT) }
+    val availableKeys = installed.map { it.key }.toSet()
     item {
         SettingsSection("Visible") {
             SettingsNote("Unchecked apps below are excluded (hidden) from the launcher. Checked apps remain visible.")
-            Text("${apps.size - state.hiddenApps.size} visible · ${state.hiddenApps.size} hidden", color = SettingsGreen)
+            val visibleCount = installed.count { it.key !in state.hiddenApps }
+            val hiddenCount = state.hiddenApps.count { it in availableKeys }
+            Text("$visibleCount visible · $hiddenCount hidden", color = SettingsGreen)
             TextButton(onClick = { onUpdate { it.copy(hiddenApps = emptySet()) } }, enabled = state.hiddenApps.isNotEmpty()) {
                 Text("Make all visible")
             }
@@ -348,8 +352,6 @@ private fun LazyListScope.hiddenAppSettings(
         OutlinedTextField(query, onQuery, Modifier.fillMaxWidth(),
             label = { Text("Filter apps") }, singleLine = true)
     }
-    val installed = apps.distinctBy { it.key }.sortedBy { it.label.lowercase(Locale.ROOT) }
-    val availableKeys = installed.map { it.key }.toSet()
     val entries = (installed.map {
         HiddenAppChoice(it.key, it.label, "${it.packageName} · ${if (it.user == android.os.Process.myUserHandle()) "Personal" else "Another profile"}")
     } + (state.hiddenApps - availableKeys).sorted().map { HiddenAppChoice(it, "Unavailable app", it) })

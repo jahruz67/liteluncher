@@ -114,7 +114,9 @@ private fun GestureBindingDialog(
             Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(gesture.gestureLabel(), style = MaterialTheme.typography.titleMedium)
-                Action.entries.forEach { option ->
+                val isSwipe = gesture in listOf(Gesture.SWIPE_UP, Gesture.SWIPE_DOWN, Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT, Gesture.TWO_UP, Gesture.TWO_DOWN, Gesture.TWO_LEFT, Gesture.TWO_RIGHT)
+                val options = if (isSwipe) Action.entries else Action.entries.filterNot { it == Action.NAVIGATE }
+                options.forEach { option ->
                     Row(Modifier.fillMaxWidth().clickable {
                         action = option
                         if (option != Action.APP && option != Action.SHORTCUT) {

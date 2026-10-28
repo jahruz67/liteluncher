@@ -77,7 +77,7 @@ internal fun LazyListScope.dockPreferences(p: LauncherPrefs, update: ((LauncherP
         ToggleSetting("All Apps button on left side", d.allAppsLeft) { v -> update { it.copy(dock = it.dock.copy(allAppsLeft = v)) } }
         ToggleSetting("Open folder as stack", d.folderStack) { v -> update { it.copy(dock = it.dock.copy(folderStack = v)) } }
         ChoiceSetting("Position", d.side, listOf("Right", "Left").map { it to it }) { v -> update { it.copy(dock = it.dock.copy(side = v)) } }
-        ToggleSetting("Use full width", d.fullWidth) { v -> update { it.copy(dock = it.dock.copy(fullWidth = v)) } }
+        ToggleSetting("Use full height", d.fullWidth) { v -> update { it.copy(dock = it.dock.copy(fullWidth = v)) } }
         FloatSetting("Alignment", d.alignment, 0f..1f) { v -> update { it.copy(dock = it.dock.copy(alignment = v)) } }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Top"); Text("Bottom") }
         ToggleSetting("Prevent changes", d.preventChanges) { v -> update { it.copy(dock = it.dock.copy(preventChanges = v)) } }

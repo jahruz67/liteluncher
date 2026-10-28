@@ -33,6 +33,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -151,11 +154,13 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
     val backupBitmap = customBitmap ?: rememberBackupBitmap(folder.backupIcon)
     val representative = apps.firstOrNull { it.key in folder.apps } ?: AppEntry("folder:${folder.id}", context.packageName,
         folder.name, android.content.ComponentName(context, dev.liteluncher.MainActivity::class.java), android.os.Process.myUserHandle())
-    val area = if (container == "dock") LayoutArea.DOCK else LayoutArea.HOME
+    val area = when (container) { "dock" -> LayoutArea.DOCK; "home" -> LayoutArea.HOME; else -> null }
     val folderPrefs = state.prefs.folders
     Column(modifier.semantics { contentDescription = folder.name }.clip(RoundedCornerShape(16.dp)).appDropTarget(AppDropTarget.Folder(folder.id), 3)
         .then(Modifier.appIconGestures(representative, area,
-            !state.folderLocked(folder.id) && (container == "home" && folder.id in state.homeFolders || container == "dock" && folder.id in state.dockFolders), onClick, onLongClick, movingFolderId = folder.id)
+            !state.folderLocked(folder.id) && (container == "home" && folder.id in state.homeFolders || container == "dock" && folder.id in state.dockFolders || container.startsWith("desktop:") && folder.id in state.desktopApps.values.flatten()),
+            onClick, onLongClick, movingFolderId = folder.id,
+            desktopPage = container.takeIf { it.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull())
         ).padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (56 * prefs.iconScale).dp
@@ -279,7 +284,11 @@ fun PageIndicators(
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp))
                     .background(color)
-                    .then(if (onSelectPage != null) Modifier.clickable { onSelectPage(index) } else Modifier)
+                    .semantics {
+                        contentDescription = "Page ${index + 1}"
+                        selected = isActive
+                    }
+                    .then(if (onSelectPage != null) Modifier.clickable(role = Role.Button) { onSelectPage(index) } else Modifier)
             )
         }
     }

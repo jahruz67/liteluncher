@@ -59,7 +59,7 @@ internal fun LauncherState.sanitizePositions(): LauncherState {
         position.key in candidates[position.container].orEmpty() && position.column >= 0 && position.row >= 0 &&
             position.columns in 1..columns && position.rows in 1..rows &&
             position.column <= columns - position.columns && position.row <= rows - position.rows
-    }.distinctBy { it.container to it.key }.take(MAX_LAYOUT_APPS).toList()
+    }.distinctBy { it.container to it.key }.groupBy { it.container }.values.flatMap { it.take(MAX_LAYOUT_APPS) }
     val widgets = pendingWidgets.asSequence().filter { widget ->
         widget.key.isNotBlank() && widget.key.length <= 512 && widget.provider.length <= 512 &&
             android.content.ComponentName.unflattenFromString(widget.provider) != null &&

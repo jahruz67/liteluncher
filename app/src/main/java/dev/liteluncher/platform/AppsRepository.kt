@@ -13,7 +13,12 @@ import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.res.Configuration
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.Canvas
 import android.graphics.Bitmap
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.util.LruCache
 import android.net.Uri
 import android.os.Handler
@@ -80,7 +85,14 @@ class AppsRepository(context: Context) : AutoCloseable {
     @Volatile private var closed = false
     private var callbackRegistered = false
     private var receiverRegistered = false
-    private val iconMappings = mutableMapOf<String, FutureTask<Map<String, String>>>()
+    data class IconPackInfo(
+        val mappings: Map<String, String> = emptyMap(),
+        val iconBack: String? = null,
+        val iconMask: String? = null,
+        val iconUpon: String? = null,
+        val scale: Float = 1f
+    )
+    private val iconMappings = mutableMapOf<String, FutureTask<IconPackInfo>>()
     private val iconBitmaps = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
@@ -184,7 +196,7 @@ class AppsRepository(context: Context) : AutoCloseable {
                     setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
                         LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
                 }, user).orEmpty().filter { shortcut ->
-                    shortcut.isEnabled && shortcut.activity?.let { (it to user) in activities } == true
+                    shortcut.isEnabled && (shortcut.isPinned || shortcut.activity == null || (shortcut.activity to user) in activities)
                 }
             }.getOrDefault(emptyList())
         }.groupBy { it.`package` to it.userHandle }
@@ -269,17 +281,27 @@ class AppsRepository(context: Context) : AutoCloseable {
 
     fun syncShortcutPins(shortcuts: List<dev.liteluncher.data.PinnedShortcut>): Boolean = runCatching {
         check(launcher.hasShortcutHostPermission())
+        var allSucceeded = true
         accessibleProfiles().forEach { user ->
             val serial = users.getSerialNumberForUser(user)
             val desired = shortcuts.filter { it.userSerial == serial }.groupBy { it.packageName }
-            val existing = launcher.getShortcuts(LauncherApps.ShortcutQuery().apply {
-                setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
-            }, user).orEmpty().map { it.`package` }
+            val existing = runCatching {
+                launcher.getShortcuts(LauncherApps.ShortcutQuery().apply {
+                    setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+                }, user).orEmpty().map { it.`package` }
+            }.getOrElse {
+                allSucceeded = false
+                emptyList()
+            }
             (existing + desired.keys).distinct().forEach { pkg ->
-                launcher.pinShortcuts(pkg, desired[pkg].orEmpty().map { it.id }.distinct(), user)
+                runCatching {
+                    launcher.pinShortcuts(pkg, desired[pkg].orEmpty().map { it.id }.distinct(), user)
+                }.onFailure {
+                    allSucceeded = false
+                }
             }
         }
-        true
+        allSucceeded
     }.getOrDefault(false)
 
     /** Requires the caller to request READ_CONTACTS; queries stay in the current profile. */
@@ -341,12 +363,57 @@ class AppsRepository(context: Context) : AutoCloseable {
                 val mappingTask = synchronized(iconMappings) {
                     iconMappings.getOrPut(iconPack) { FutureTask { readIconMappings(iconPack) } }
                 }
-                mappingTask.run()
-                val mapping = mappingTask.get()
+                val packInfo = try {
+                    mappingTask.run()
+                    mappingTask.get()
+                } catch (e: Exception) {
+                    synchronized(iconMappings) { iconMappings.remove(iconPack) }
+                    null
+                }
+                val mapping = packInfo?.mappings.orEmpty()
                 val name = mapping[app.component.flattenToString()]
                     ?: mapping[app.component.flattenToShortString()]
                 val id = name?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
-                if (id == 0) null else packages.getUserBadgedIcon(resources.getDrawable(id, null), app.user)
+                if (id != 0) packages.getUserBadgedIcon(resources.getDrawable(id, null), app.user)
+                else if (packInfo != null && (packInfo.iconBack != null || packInfo.iconMask != null || packInfo.iconUpon != null)) {
+                    val baseDrawable = runCatching {
+                        launcher.getActivityList(app.packageName, app.user)
+                            .firstOrNull { it.componentName == app.component }
+                            ?.getBadgedIcon(context.resources.displayMetrics.densityDpi)
+                    }.getOrNull()
+                    val backId = packInfo.iconBack?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
+                    val maskId = packInfo.iconMask?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
+                    val uponId = packInfo.iconUpon?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
+                    if (baseDrawable != null) {
+                        val size = 192
+                        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                        val canvas = Canvas(bmp)
+                        if (backId != 0) resources.getDrawable(backId, null).apply {
+                            setBounds(0, 0, size, size)
+                            draw(canvas)
+                        }
+                        val s = packInfo.scale.coerceIn(0.2f, 1f)
+                        val inset = ((1f - s) * size / 2f).toInt()
+                        val layer = canvas.saveLayer(inset.toFloat(), inset.toFloat(), (size - inset).toFloat(), (size - inset).toFloat(), null)
+                        baseDrawable.setBounds(inset, inset, size - inset, size - inset)
+                        baseDrawable.draw(canvas)
+                        if (maskId != 0) {
+                            val mask = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                            val maskCanvas = Canvas(mask)
+                            resources.getDrawable(maskId, null).apply { setBounds(inset, inset, size - inset, size - inset); draw(maskCanvas) }
+                            canvas.drawBitmap(mask, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+                            })
+                            mask.recycle()
+                        }
+                        canvas.restoreToCount(layer)
+                        if (uponId != 0) resources.getDrawable(uponId, null).apply {
+                            setBounds(0, 0, size, size)
+                            draw(canvas)
+                        }
+                        BitmapDrawable(context.resources, bmp)
+                    } else null
+                } else null
             }.getOrNull()
             if (themed != null) return themed
         }
@@ -357,31 +424,64 @@ class AppsRepository(context: Context) : AutoCloseable {
         }.getOrNull()
     }
 
-    fun iconPacks(): List<Pair<String, String>> = listOf("org.adw.launcher.THEMES", "com.gau.go.launcherex.theme")
-        .flatMap { action -> runCatching {
+    fun iconPacks(): List<Pair<String, String>> = listOf(
+        "org.adw.launcher.THEMES",
+        "com.gau.go.launcherex.theme",
+        "com.novalauncher.THEME",
+        "com.teslacoilsw.launcher.THEME",
+        "com.fede.launcher.THEME_ICONPACK",
+        "com.anddoes.launcher.THEME"
+    ).flatMap { action -> runCatching {
             @Suppress("DEPRECATION")
             packages.queryIntentActivities(Intent(action), PackageManager.GET_META_DATA)
                 .map { it.activityInfo.packageName to it.loadLabel(packages).toString() }
         }.getOrDefault(emptyList()) }.distinctBy { it.first }.sortedBy { it.second.lowercase() }
 
-    private fun readIconMappings(packageName: String): Map<String, String> {
+    private fun readIconMappings(packageName: String): IconPackInfo {
         val resources = packages.getResourcesForApplication(packageName)
         val xmlId = resources.getIdentifier("appfilter", "xml", packageName)
-        fun parse(parser: XmlPullParser): Map<String, String> {
+        fun parse(parser: XmlPullParser): IconPackInfo {
             val result = mutableMapOf<String, String>()
+            var iconBack: String? = null
+            var iconMask: String? = null
+            var iconUpon: String? = null
+            var scale = 1f
             while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-                if (parser.eventType == XmlPullParser.START_TAG && parser.name == "item") {
-                    val raw = parser.getAttributeValue(null, "component").orEmpty()
-                    val drawable = parser.getAttributeValue(null, "drawable").orEmpty()
-                    val component = ComponentName.unflattenFromString(raw.removePrefix("ComponentInfo{").removeSuffix("}"))
-                    if (component != null && drawable.isNotBlank()) {
-                        result[component.flattenToString()] = drawable
-                        result[component.flattenToShortString()] = drawable
+                if (parser.eventType == XmlPullParser.START_TAG) {
+                    when (parser.name) {
+                        "item" -> {
+                            val raw = parser.getAttributeValue(null, "component").orEmpty()
+                            val drawable = parser.getAttributeValue(null, "drawable").orEmpty()
+                            val component = ComponentName.unflattenFromString(raw.removePrefix("ComponentInfo{").removeSuffix("}"))
+                            if (component != null && drawable.isNotBlank()) {
+                                result[component.flattenToString()] = drawable
+                                result[component.flattenToShortString()] = drawable
+                            }
+                        }
+                        "calendar" -> {
+                            val raw = parser.getAttributeValue(null, "component").orEmpty()
+                            val prefix = parser.getAttributeValue(null, "prefix").orEmpty()
+                            val component = ComponentName.unflattenFromString(raw.removePrefix("ComponentInfo{").removeSuffix("}"))
+                            if (component != null && prefix.isNotBlank()) {
+                                val day = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_MONTH)
+                                val candidate = "$prefix$day"
+                                val id = resources.getIdentifier(candidate, "drawable", packageName)
+                                val drawable = if (id != 0) candidate else parser.getAttributeValue(null, "drawable").orEmpty()
+                                if (drawable.isNotBlank()) {
+                                    result[component.flattenToString()] = drawable
+                                    result[component.flattenToShortString()] = drawable
+                                }
+                            }
+                        }
+                        "iconback" -> if (iconBack == null) iconBack = parser.getAttributeValue(null, "img1")
+                        "iconmask" -> if (iconMask == null) iconMask = parser.getAttributeValue(null, "img1")
+                        "iconupon" -> if (iconUpon == null) iconUpon = parser.getAttributeValue(null, "img1")
+                        "scale" -> scale = parser.getAttributeValue(null, "factor")?.toFloatOrNull() ?: scale
                     }
                 }
                 parser.next()
             }
-            return result
+            return IconPackInfo(result, iconBack, iconMask, iconUpon, scale)
         }
         return if (xmlId != 0) resources.getXml(xmlId).use(::parse) else {
             resources.assets.open("appfilter.xml").use { stream ->

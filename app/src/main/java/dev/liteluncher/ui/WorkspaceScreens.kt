@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -27,6 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -108,7 +111,7 @@ fun HomeScreen(
             Spacer(Modifier.height(32.dp))
         }
 
-        if (state.positions.any { it.container == "home" } || state.workspaceKeys("home").size > prefs.columns * prefs.rows || selected.size < state.homeApps.size) {
+        if (prefs.listMode || state.positions.any { it.container == "home" } || state.workspaceKeys("home").size > prefs.columns * prefs.rows || selected.size < state.homeApps.size) {
             val dockInset = if (state.prefs.dock.enabled) (56 * state.prefs.dock.iconScale + 12).dp else 0.dp
             PositionedWorkspace("home", state, apps, repository, prefs, badges, actions,
                 Modifier.weight(1f).fillMaxWidth().padding(
@@ -126,13 +129,12 @@ fun HomeScreen(
                 start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
                 end = if (state.prefs.dock.side == "Right") dockInset else 0.dp
             )) {
-            val visibleRows = if (prefs.listMode) filledSlots.coerceIn(1, slotCount) else prefs.rows
             val spacing = if (prefs.listMode) (prefs.spacing / 2).dp else 0.dp
-            val rowHeight = ((maxHeight - spacing * (visibleRows - 1)) / visibleRows).coerceAtLeast(0.dp)
+            val rowHeight = if (prefs.listMode) 88.dp else (maxHeight / prefs.rows)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
                 modifier = Modifier.fillMaxSize(),
-                userScrollEnabled = false,
+                userScrollEnabled = prefs.listMode,
                 horizontalArrangement = Arrangement.spacedBy((prefs.spacing / 4).dp),
                 verticalArrangement = Arrangement.spacedBy(spacing)
             ) {
@@ -150,8 +152,10 @@ fun HomeScreen(
                     val app = remember(apps, shortcut.packageName, shortcut.userSerial) {
                         apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
                     }
+                    val backup = rememberBackupBitmap(shortcut.backupIcon)
                     Column(
-                        Modifier.height(rowHeight).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
+                        Modifier.height(rowHeight).fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                            .semantics { contentDescription = shortcut.label }.combinedClickable(onClick = {
                             val user = app?.user ?: context.getSystemService(android.os.UserManager::class.java)
                                 ?.getUserForSerialNumber(shortcut.userSerial)
                             if (user != null) actions.shortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
@@ -163,11 +167,12 @@ fun HomeScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Box {
-                            if (app != null) AppIcon(app, repository, state, (56 * prefs.iconScale).toInt())
+                            if (backup != null) Image(backup.asImageBitmap(), shortcut.label, Modifier.size((56 * prefs.iconScale).dp), contentScale = ContentScale.Fit)
+                            else if (app != null) AppIcon(app, repository, state, (56 * prefs.iconScale).toInt())
                             else Icon(Icons.Rounded.Shortcut, null, modifier = Modifier.size(48.dp))
                             Icon(Icons.Rounded.Shortcut, null, tint = Cerulean, modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).background(Ink, CircleShape))
                         }
-                        if (prefs.labels) Text(shortcut.label, fontSize = 11.sp, maxLines = if (prefs.multiline) 2 else 1, modifier = Modifier.padding(top = 8.dp))
+                        if (prefs.labels) Text(shortcut.label, fontSize = (12 * prefs.textScale).sp, maxLines = if (prefs.multiline) 2 else 1, modifier = Modifier.padding(top = 8.dp))
                     }
                 }
                 repeat((slotCount - filledSlots.coerceAtLeast(0)).coerceAtLeast(0)) {
@@ -238,7 +243,9 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().padding(start = 12.dp, top = 16.dp, bottom = 28.dp)) {
         if (prefs.analog) {
             // Analog clock rendering
-            Box(Modifier.size((110 * prefs.size / 52f * textScale).dp).clickable(onClick = onClockClick).align(Alignment.Start), contentAlignment = Alignment.Center) {
+            Box(Modifier.size((110 * prefs.size / 52f * textScale).dp)
+                .semantics { contentDescription = "Time ${now.format(DateTimeFormatter.ofPattern(if (prefs.use24Hour) "HH:mm" else "h:mm a", Locale.getDefault()))}" }
+                .clickable(onClick = onClockClick).align(Alignment.Start), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxSize()) {
                     val radius = size.minDimension / 2f - 4f
                     val center = Offset(size.width / 2f, size.height / 2f)
@@ -375,7 +382,9 @@ fun AppDrawer(
 
     Column(Modifier.fillMaxSize().padding(start = prefs.borderPaddingDp.dp, end = 2.dp)) {
         if (showSearchBar && !state.prefs.search.barAtBottom) searchField()
-        if (rows.isEmpty()) EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
+        if (rows.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
+        }
         else Row(Modifier.weight(1f)) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
@@ -456,8 +465,14 @@ fun AppListRow(app: AppEntry, repository: AppsRepository, state: LauncherState, 
         if (prefs.labels) Text(label, modifier = Modifier.padding(start = 15.dp).weight(1f), fontSize = (14 * prefs.textScale).sp,
             maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis)
         else Spacer(Modifier.weight(1f))
-        if (state.prefs.badges.enabled && (badges[app.badgeKey] ?: 0) > 0) Badge {
-            Text(if (badgeCounts(state.prefs)) "${badges[app.badgeKey]}" else "•")
+        val badgeCount = badges[app.badgeKey] ?: 0
+        if (state.prefs.badges.enabled && badgeCount > 0) {
+            val showCount = badgeCounts(state.prefs)
+            val badgeColor = parseColor(state.prefs.badges.color)
+            val badgeSize = ((if (showCount) 19 else 10) * state.prefs.badges.scale).dp
+            Box(Modifier.size(badgeSize).background(badgeColor, CircleShape), contentAlignment = Alignment.Center) {
+                if (showCount) Text(if (badgeCount > 99) "99+" else "$badgeCount", color = contrastContent(badgeColor), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            }
         }
         Icon(Icons.Rounded.NorthEast, null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -487,11 +502,14 @@ fun FavoritesScreen(
                 .sortedByDescending { (usage[it.key] ?: 0L) + (state.launches[it.key] ?: 0) * 60_000L }
                 .map { it.key }
         } else {
-            apps.sortedBy { it.label.lowercase(Locale.ROOT) }.map { it.key }
+            apps.map { it.key }
         }
         val available = apps.associateBy { it.key }
         val combined = (state.favoriteApps + baseList).distinct().filter { it !in excluded && it in available }.take(prefs.maxItems)
-        val ordered = if (prefs.reverse) combined.reversed() else combined
+        val alphaOrdered = if (prefs.byUsage) combined else combined.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) {
+            state.overrides[it]?.label?.ifBlank { available[it]?.label.orEmpty() } ?: available[it]?.label.orEmpty()
+        })
+        val ordered = if (prefs.reverse) alphaOrdered.reversed() else alphaOrdered
         ordered.mapNotNull(available::get)
     }
 
@@ -515,7 +533,8 @@ fun FavoritesScreen(
     val columns = if (prefs.grid.listMode) 1 else if (prefs.itemsPerRow > 0) prefs.itemsPerRow else 4
     val showSearchBar = Screen.FAVORITES in state.prefs.search.barScreens
 
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = prefs.grid.borderPaddingDp.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = prefs.grid.borderPaddingDp.dp)) {
+    LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
         if (showSearchBar && !state.prefs.search.barAtBottom) {
             item {
                 Spacer(Modifier.height(8.dp))
@@ -560,21 +579,21 @@ fun FavoritesScreen(
             }
             if (permitted && pinned.isEmpty()) item { Text("Pin a contact to add them here.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 24.dp)) }
         }
-        if (showSearchBar && state.prefs.search.barAtBottom) {
-            item {
-                Spacer(Modifier.height(16.dp))
-                LauncherSearchField(
-                    query = "",
-                    onQuery = { actions.navigate(Screen.SEARCH) },
-                    placeholder = state.prefs.search.barText,
-                    onSubmit = { actions.navigate(Screen.SEARCH) },
-                    onVoice = onVoice.takeIf { state.prefs.search.voice },
-                    theme = state.prefs.appearance.search,
-                    onActivate = { actions.navigate(Screen.SEARCH) }
-                )
-            }
-        }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+    if (showSearchBar && state.prefs.search.barAtBottom) {
+        Spacer(Modifier.height(8.dp))
+        LauncherSearchField(
+            query = "",
+            onQuery = { actions.navigate(Screen.SEARCH) },
+            placeholder = state.prefs.search.barText,
+            onSubmit = { actions.navigate(Screen.SEARCH) },
+            onVoice = onVoice.takeIf { state.prefs.search.voice },
+            theme = state.prefs.appearance.search,
+            onActivate = { actions.navigate(Screen.SEARCH) }
+        )
+        Spacer(Modifier.height(8.dp))
+    }
     }
     if (picker) AlertDialog(onDismissRequest = { picker = false }, title = { Text("Pin contacts") }, text = {
         LazyColumn(Modifier.heightIn(max = 400.dp)) {

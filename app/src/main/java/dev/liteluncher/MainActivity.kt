@@ -41,30 +41,46 @@ class MainActivity : ComponentActivity() {
         if (!it) toast("Contact access is off. You can enable it in Android app settings.")
     }
     private val exportBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri != null) lifecycleScope.launch {
+        if (uri != null) model.viewModelScope.launch {
             var missingIcons = 0
+            val appContext = applicationContext
             runCatching {
                 val json = model.store.exportJson()
-                withContext(Dispatchers.IO) {
-                    val portable = LauncherBackup.portableIcons(this@MainActivity, json) { missingIcons = it }
+                withContext(Dispatchers.IO + NonCancellable) {
+                    val portable = LauncherBackup.portableIcons(appContext, json) { missingIcons = it }
                     contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(portable) }
                         ?: error("Cannot open the selected document")
                 }
-            }.onSuccess { toast(if (missingIcons == 0) "Launcher backup saved" else "Backup saved; $missingIcons unavailable custom icons omitted") }
-                .onFailure { toast(it.message ?: "Backup failed") }
+            }.onSuccess {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(appContext, if (missingIcons == 0) "Launcher backup saved" else "Backup saved; $missingIcons unavailable custom icons omitted", Toast.LENGTH_SHORT).show()
+                }
+            }.onFailure {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(appContext, it.message ?: "Backup failed", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
     private val importBackup = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) lifecycleScope.launch {
+        if (uri != null) model.viewModelScope.launch {
+            val appContext = applicationContext
             runCatching {
-                val json = withContext(Dispatchers.IO) {
+                val json = withContext(Dispatchers.IO + NonCancellable) {
                     contentResolver.openInputStream(uri)?.use { stream ->
                         LauncherBackup.read(stream)
                     } ?: error("Cannot read the selected document")
                 }
                 model.store.importJson(json).getOrThrow()
-            }.onSuccess { toast("Layout restored. Tap saved widget placeholders to reconnect widgets.") }
-                .onFailure { toast(it.message ?: "This backup could not be restored") }
+            }.onSuccess {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(appContext, "Layout restored. Tap saved widget placeholders to reconnect widgets.", Toast.LENGTH_SHORT).show()
+                }
+            }.onFailure {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(appContext, it.message ?: "This backup could not be restored", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
     private val voiceSearch = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -76,7 +92,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        widgets = WidgetController(this) { item ->
+        widgets = WidgetController(this, onAdded = { item, completed ->
             model.viewModelScope.launch {
                 // Resolve the resource handoff even if the ViewModel is cleared mid-save.
                 withContext(NonCancellable) {
@@ -99,13 +115,21 @@ class MainActivity : ComponentActivity() {
                         }.getOrThrow()
                     }
                     saved.onFailure {
-                        widgets.remove(item.id)
                         toast(it.message ?: "The widget could not be saved")
                     }
-                    widgets.finishAddition(item.id, saved.isSuccess)
+                    completed(saved.isSuccess)
                 }
             }
-        }
+        }, onRollbackAdded = { item ->
+            model.viewModelScope.launch {
+                withContext(NonCancellable) {
+                    model.store.updateAndAwait { state ->
+                        state.copy(widgets = state.widgets.filterNot { it.id == item.id },
+                            pendingWidgets = state.pendingWidgets.filterNot { it.key == item.restoreKey })
+                    }
+                }
+            }
+        })
         setContent {
             LauncherApp(
                 model = model, widgets = widgets, homeSignal = homeSignal, permissionSignal = permissionSignal,

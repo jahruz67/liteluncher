@@ -73,8 +73,10 @@ fun WidgetPicker(
     var expanded by rememberSaveable { mutableStateOf<String?>(null) }
     var collapsed by rememberSaveable(query) { mutableStateOf(emptyList<String>()) }
     val groups = remember(providers, query) {
-        providers.orEmpty().filter { (_, label, widgets) ->
-            label.contains(query, true) || widgets.any { it.label.contains(query, true) }
+        providers.orEmpty().mapNotNull { group ->
+            val matches = if (group.label.contains(query, true)) group.widgets
+                else group.widgets.filter { it.label.contains(query, true) }
+            group.copy(widgets = matches).takeIf { matches.isNotEmpty() }
         }
     }
     var dragging by remember { mutableStateOf<AppWidgetProviderInfo?>(null) }

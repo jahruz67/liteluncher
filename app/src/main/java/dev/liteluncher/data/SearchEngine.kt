@@ -7,6 +7,7 @@ import java.net.URLEncoder
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.pow
@@ -175,6 +176,33 @@ object SearchEngine {
             }
         }
 
+        private fun bigDecimalSqrt(value: BigDecimal): BigDecimal {
+            require(value.signum() >= 0)
+            if (value.signum() == 0) return BigDecimal.ZERO
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                return value.sqrt(MathContext.DECIMAL128)
+            }
+            val stripped = value.stripTrailingZeros()
+            val e = (stripped.precision() - stripped.scale()) / 2
+            var x = BigDecimal.ONE.scaleByPowerOfTen(e)
+            val two = BigDecimal(2)
+            val mc = MathContext.DECIMAL128
+            for (i in 0 until 30) {
+                val next = x.add(value.divide(x, mc), mc).divide(two, mc)
+                if (next == x) break
+                x = next
+            }
+            return x
+        }
+
+        private fun bigDecimalLog10(value: BigDecimal): Double {
+            require(value.signum() > 0)
+            val stripped = value.stripTrailingZeros()
+            val e = stripped.precision() - stripped.scale() - 1
+            val m = stripped.scaleByPowerOfTen(-e).toDouble()
+            return log10(m) + e
+        }
+
         private fun power(): BigDecimal {
             val base = primary()
             return if (consume('^')) {
@@ -182,8 +210,17 @@ object SearchEngine {
                 val exponent = unary()
                 val integer = runCatching { exponent.intValueExact() }.getOrNull()
                 if (integer != null && integer in -1024..1024) {
-                    if (integer >= 0) finite(base.pow(integer))
-                    else finite(BigDecimal.ONE.divide(base.pow(-integer), MathContext.DECIMAL128))
+                    val absInt = kotlin.math.abs(integer)
+                    val outputScale = base.scale().toLong() * integer
+                    require(base.precision() * absInt <= 4096 && outputScale in -4096..4096) { "Exponentiation exceeds size limit" }
+                    if (integer >= 0) finite(base.pow(integer, MathContext.DECIMAL128))
+                    else finite(BigDecimal.ONE.divide(base.pow(-integer, MathContext.DECIMAL128), MathContext.DECIMAL128))
+                } else if (base.signum() > 0) {
+                    val log10Result = exponent.toDouble() * bigDecimalLog10(base)
+                    require(log10Result.isFinite() && log10Result in -4096.0..4096.0) { "Power result exceeds size limit" }
+                    val scale = floor(log10Result).toInt()
+                    val mantissa = 10.0.pow(log10Result - scale)
+                    finite(BigDecimal.valueOf(mantissa).scaleByPowerOfTen(scale))
                 } else approximate(base.toDouble().pow(exponent.toDouble()))
             } else base
         }
@@ -209,6 +246,9 @@ object SearchEngine {
                         require(consume(')'))
                         operation()
                         if (name == "abs") return decimalArgument.abs()
+                        if (name == "sqrt") return finite(bigDecimalSqrt(decimalArgument))
+                        if (name == "log") return approximate(bigDecimalLog10(decimalArgument))
+                        if (name == "ln") return approximate(bigDecimalLog10(decimalArgument) * ln(10.0))
                         approximate(when (name) {
                             "sqrt" -> sqrt(argument)
                             "abs" -> abs(argument)

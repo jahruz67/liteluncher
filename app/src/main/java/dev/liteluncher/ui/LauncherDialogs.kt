@@ -81,8 +81,8 @@ fun AppContextMenu(
     }
     fun update(block: (LauncherState) -> LauncherState) { actions.update(block); onDismiss() }
     val removable = when {
-        source == Screen.DESKTOP -> state.desktopApps.values.any { app.key in it } && !state.prefs.desktop.preventChanges
         fromDock -> app.key in state.dockApps && !state.prefs.dock.preventChanges
+        source == Screen.DESKTOP -> state.desktopApps.values.any { app.key in it } && !state.prefs.desktop.preventChanges
         source == Screen.HOME -> app.key in state.homeApps && !state.prefs.home.preventChanges
         source == Screen.FAVORITES -> app.key in state.favoriteApps
         else -> false
@@ -161,7 +161,10 @@ fun AppContextMenu(
                                 IconButton(
                                     onClick = {
                                         val serial = requireNotNull(context.getSystemService(UserManager::class.java)).getSerialNumberForUser(shortcut.user)
-                                        if (state.layoutSpace(LayoutArea.HOME) <= 0) {
+                                        val alreadyPinned = state.shortcuts.any {
+                                            it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == serial && it.container == "home"
+                                        }
+                                        if (!alreadyPinned && state.layoutSpace(LayoutArea.HOME) <= 0) {
                                             android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
                                             onDismiss()
                                         } else if (!repository.syncShortcutPins(state.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial))) {
@@ -356,11 +359,11 @@ fun FolderOverlay(
     val folderColor = if (folderPrefs.background == "Custom") parseColor(folderPrefs.color)
         else surfaceColor(state.prefs.appearance.launcher, MaterialTheme.colorScheme.primary)
     val background = folderColor.copy(alpha = folderColor.alpha * folderPrefs.opacity)
-    val folderContent = if (folderColor.luminance() > .5f) Ink else Mist
+    val folderContent = contrastContent(folderColor)
 
     // Keep the source composed until release so its pointer handler continues the drag.
     Box(Modifier.fillMaxSize().alpha(if (draggingOutside) 0f else 1f).background(ColorForOverlay).clickable(onClick = onDismiss)) {
-        if (folder.entryOrder.isNotEmpty() && !stack) {
+        if (!stack) {
             val keys = state.workspaceKeys("folder:${folder.id}")
             Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp)
                 .onGloballyPositioned { bounds = it.boundsInRoot() }.appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -67,7 +68,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 
 data class WorkspaceActions(
-    val launch: (AppEntry) -> Unit,
+    val launch: (AppEntry) -> Boolean,
     val menu: (AppEntry) -> Unit,
     val navigate: (Screen) -> Unit,
     val settings: () -> Unit,
@@ -82,6 +83,20 @@ data class WorkspaceActions(
     val editFolder: (FolderItem) -> Unit = {},
     val folderActions: (FolderItem) -> Unit = editFolder,
     val shortcut: (NativeShortcut) -> Boolean = { false }
+)
+
+private val widgetUndoSaver = Saver<WidgetItem?, ArrayList<Any>>(
+    save = { item -> item?.let { arrayListOf(it.id, it.column, it.row, it.columns, it.rows, it.page, it.provider, it.restoreKey) } },
+    restore = { saved -> WidgetItem(saved[0] as Int, saved[1] as Int, saved[2] as Int, saved[3] as Int,
+        saved[4] as Int, saved[5] as Int, saved[6] as String, saved[7] as String) }
+)
+private val deletedAppSaver = Saver<Triple<LayoutArea, String, Int>?, ArrayList<Any>>(
+    save = { item -> item?.let { arrayListOf(it.first.name, it.second, it.third) } },
+    restore = { saved -> Triple(LayoutArea.valueOf(saved[0] as String), saved[1] as String, saved[2] as Int) }
+)
+private val deletedPositionSaver = Saver<ItemPosition?, ArrayList<Any>>(
+    save = { item -> item?.let { arrayListOf(it.key, it.container, it.column, it.row, it.columns, it.rows) } },
+    restore = { saved -> ItemPosition(saved[0] as String, saved[1] as String, saved[2] as Int, saved[3] as Int, saved[4] as Int, saved[5] as Int) }
 )
 
 @Composable
@@ -124,22 +139,26 @@ fun LauncherApp(
     var iconPacks by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
     // Deletion snackbar state with Undo
-    var snackbarVisible by remember { mutableStateOf(false) }
-    var snackbarMessage by remember { mutableStateOf("Entry deleted") }
-    var undoSignal by remember { mutableIntStateOf(0) }
-    var lastDeletedWidget by remember { mutableStateOf<WidgetItem?>(null) }
-    var lastDeletedAppKey by remember { mutableStateOf<Triple<LayoutArea, String, Int>?>(null) }
-    var lastDeletedPosition by remember { mutableStateOf<ItemPosition?>(null) }
+    var snackbarVisible by rememberSaveable { mutableStateOf(false) }
+    var snackbarMessage by rememberSaveable { mutableStateOf("Entry deleted") }
+    var undoSignal by rememberSaveable { mutableIntStateOf(0) }
+    var lastDeletedWidget by rememberSaveable(stateSaver = widgetUndoSaver) { mutableStateOf<WidgetItem?>(null) }
+    var lastDeletedAppKey by rememberSaveable(stateSaver = deletedAppSaver) { mutableStateOf<Triple<LayoutArea, String, Int>?>(null) }
+    var lastDeletedPosition by rememberSaveable(stateSaver = deletedPositionSaver) { mutableStateOf<ItemPosition?>(null) }
     var undoInProgress by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Multi-page desktop support
     var currentDesktopPage by rememberSaveable { mutableIntStateOf(0) }
     var desktopBounds by remember { mutableStateOf(Rect.Zero) }
+    val horizontalScreens = state.prefs.navigation.horizontalScreens()
+    val horizontalPaging = state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide"
+    val pager = rememberPagerState(initialPage = horizontalScreens.indexOf(manager.current).coerceAtLeast(0), pageCount = { horizontalScreens.size })
 
     val toast: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
-    val launch: (AppEntry) -> Unit = { app ->
-        if (model.apps.launch(app)) {
+    val launch: (AppEntry) -> Boolean = { app ->
+        val launched = model.apps.launch(app)
+        if (launched) {
             model.store.recordLaunch(app.key)
             if (query.isNotBlank()) model.store.addHistory(query)
             query = ""
@@ -151,13 +170,14 @@ fun LauncherApp(
                 manager.navigate(Screen.HOME, state.prefs.navigation)
             }
         } else toast("This app is unavailable in the current profile")
+        launched
     }
     val navigate: (Screen) -> Unit = { screen ->
         if (screen != Screen.SEARCH) {
             focusManager.clearFocus(force = true)
             keyboard?.hide()
         }
-        manager.navigate(screen, state.prefs.navigation)
+        if (!manager.navigate(screen, state.prefs.navigation)) toast("Enable this screen in Manage screens first")
         folder = null
         folderMenu = null
         editingFolderId = null
@@ -173,10 +193,10 @@ fun LauncherApp(
         launched
     }
 
-    fun perform(binding: GestureBinding) {
+    fun perform(binding: GestureBinding, navigationDirection: Direction = Direction.UP) {
         when (binding.action) {
             Action.NONE -> Unit
-            Action.NAVIGATE -> Unit
+            Action.NAVIGATE -> manager.swipe(navigationDirection, state.prefs.navigation)
             Action.HOME -> { panel = ""; query = ""; navigate(Screen.HOME) }
             Action.SEARCH -> navigate(Screen.SEARCH)
             Action.APPS -> navigate(Screen.APPS)
@@ -289,25 +309,32 @@ fun LauncherApp(
             result.error != null -> toast(result.error)
             target == AppDropTarget.Remove && item.source != null && item.movingFolderId == null -> removeEntry(item.app.key, item.source)
             else -> {
-                model.store.update { place(it).state }
-                val targetArea = when (target) {
-                    is AppDropTarget.Area -> target.area
-                    is AppDropTarget.CreateFolder -> target.area
-                    is AppDropTarget.Folder -> if (target.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
-                    AppDropTarget.Remove -> null
-                    is AppDropTarget.DesktopCell -> null
-                }
-                if (item.source == null && panel.isEmpty() && targetArea != null &&
-                    (target !is AppDropTarget.Folder || target.id != item.folderId)) {
-                    keyboard?.hide()
-                    when (targetArea) {
-                        LayoutArea.HOME, LayoutArea.DOCK -> navigate(Screen.HOME)
-                        LayoutArea.FAVORITES -> if (Screen.FAVORITES in state.prefs.navigation.enabledScreens) navigate(Screen.FAVORITES)
+                    scope.launch {
+                        model.store.updateAndAwait { current ->
+                            val queued = place(current)
+                            require(queued.error == null) { queued.error.orEmpty() }
+                            queued.state
+                        }.onSuccess {
+                            val targetArea = when (target) {
+                                is AppDropTarget.Area -> target.area
+                                is AppDropTarget.CreateFolder -> target.area
+                                is AppDropTarget.Folder -> if (target.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
+                                AppDropTarget.Remove -> null
+                                is AppDropTarget.DesktopCell -> null
+                            }
+                            if (item.source == null && panel.isEmpty() && targetArea != null &&
+                                (target !is AppDropTarget.Folder || target.id != item.folderId)) {
+                                keyboard?.hide()
+                                when (targetArea) {
+                                    LayoutArea.HOME, LayoutArea.DOCK -> navigate(Screen.HOME)
+                                    LayoutArea.FAVORITES -> navigate(Screen.FAVORITES)
+                                }
+                            }
+                        }.onFailure { toast(it.message ?: "The entry could not be moved") }
                     }
                 }
             }
         }
-    }
     val latestDrop by rememberUpdatedState(onAppDrop)
     val drag = remember { AppDragController(onDragStart = { appMenu = null; folderMenu = null }) { item, target -> latestDrop(item, target) } }
     var previousPanel by remember { mutableStateOf(panel) }
@@ -377,8 +404,18 @@ fun LauncherApp(
     LaunchedEffect(widgets, ready, state, currentDesktopPage) {
         if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets, currentDesktopPage, state.desktopObstacles())
     }
-    LaunchedEffect(ready, state.shortcuts) {
-        if (ready) withContext(Dispatchers.IO) { model.apps.syncShortcutPins(state.shortcuts) }
+    val shortcutRevision by model.apps.shortcutRevision.collectAsStateWithLifecycle()
+    LaunchedEffect(ready, state.shortcuts, state.prefs.gestures, permissionSignal, shortcutRevision) {
+        if (ready) {
+            val gesturePins = state.prefs.gestures.values.mapNotNull { binding ->
+                val component = android.content.ComponentName.unflattenFromString(binding.target.substringBeforeLast('|'))
+                val serial = binding.target.substringAfterLast('|').toLongOrNull()
+                val shortcutId = binding.shortcutId.takeIf { binding.action == Action.SHORTCUT && it.isNotBlank() }
+                if (component == null || serial == null || shortcutId == null) null
+                else PinnedShortcut(shortcutId, component.packageName, "Gesture shortcut", serial)
+            }
+            withContext(Dispatchers.IO) { model.apps.syncShortcutPins(state.shortcuts + gesturePins) }
+        }
     }
     var previousIconUris by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(ready, state.overrides, state.folders) {
@@ -410,10 +447,14 @@ fun LauncherApp(
         val requested = if (state.prefs.behavior.lockRotation && !isTablet) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         if (activity.requestedOrientation != requested) activity.requestedOrientation = requested
     }
+    val pagerProgress = if (horizontalScreens.size <= 1) 0f else
+        (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, (horizontalScreens.size - 1).toFloat()) / (horizontalScreens.size - 1)
+    val wallpaperPageProgress = if (manager.current == Screen.DESKTOP && state.prefs.desktop.pageCount > 1)
+        currentDesktopPage.toFloat() / (state.prefs.desktop.pageCount - 1) else pagerProgress
     val wallpaperOffsets = when (state.prefs.behavior.wallpaperScroll) {
         "Off" -> (when (state.prefs.behavior.wallpaperAlignment) { "Left" -> 0f; "Right" -> 1f; else -> .5f }) to .5f
-        "Horizontal" -> (.5f + manager.current.x * .5f) to .5f
-        else -> (.5f + manager.current.x * .5f) to (.5f + manager.current.y * .5f)
+        "Horizontal" -> wallpaperPageProgress to .5f
+        else -> wallpaperPageProgress to (.5f + manager.current.y * .5f)
     }
     DisposableEffect(view, wallpaperOffsets, permissionSignal) {
         fun updateOffsets() {
@@ -459,7 +500,7 @@ fun LauncherApp(
                 val appearance = state.prefs.appearance
                 val dimColor = when (appearance.dimMode) {
                     "Off" -> Color.Transparent
-                    "Custom" -> parseColor(appearance.backgroundColor, Color.Black.copy(alpha = appearance.dim))
+                    "Custom" -> parseColor(appearance.backgroundColor).copy(alpha = appearance.dim)
                     else -> Color.Black.copy(alpha = appearance.dim)
                 }
                 Box(Modifier.fillMaxSize().background(dimColor))
@@ -481,17 +522,18 @@ fun LauncherApp(
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                             when (panel) {
-                                "settings" -> SettingsScreen(state, apps, iconPacks, model.store::update, { panel = "" }, { screenManagerReturn = "settings"; panel = "screens" }, onExport, onImport,
-                                    onDefaultHome, { SystemActions.notificationAccess(context) }, { SystemActions.usageAccess(context) }, onContacts)
+                                "settings" -> Column(Modifier.fillMaxSize()) {
+                                    if (storageError != null) Text(storageError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
+                                        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
+                                    SettingsScreen(state, apps, iconPacks, model.store::update, { panel = "" }, { screenManagerReturn = "settings"; panel = "screens" }, onExport, onImport,
+                                        onDefaultHome, { SystemActions.notificationAccess(context) }, { SystemActions.usageAccess(context) }, onContacts)
+                                }
                             }
                         }
                     }
                     }
                     }
                 } else {
-                    val horizontalScreens = state.prefs.navigation.horizontalScreens()
-                    val horizontalPaging = state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide"
-                    val pager = rememberPagerState(initialPage = horizontalScreens.indexOf(manager.current).coerceAtLeast(0), pageCount = { horizontalScreens.size })
                     val navigationRevision = manager.navigationRevision
                     var completedNavigation by remember { mutableStateOf<Pair<Long, List<Screen>>?>(null) }
                     var workspacePointerCount by remember { mutableIntStateOf(0) }
@@ -553,17 +595,19 @@ fun LauncherApp(
                                 Direction.RIGHT -> if (fingers >= 2) Gesture.TWO_RIGHT else Gesture.SWIPE_RIGHT
                             }
                             val binding = state.prefs.gestures[gesture] ?: GestureBinding()
-                            if (binding.action == Action.NAVIGATE) manager.swipe(direction, state.prefs.navigation)
+                            if (binding.action == Action.NAVIGATE) {
+                                if (fingers >= state.prefs.navigation.fingers) manager.swipe(direction, state.prefs.navigation)
+                            }
                             else perform(binding)
                             folder = null
                         },
-                        onPinch = { inward -> perform(state.prefs.gestures[if (inward) Gesture.PINCH_IN else Gesture.PINCH_OUT] ?: GestureBinding()) }
+                        onPinch = { inward -> perform(
+                            state.prefs.gestures[if (inward) Gesture.PINCH_IN else Gesture.PINCH_OUT] ?: GestureBinding(),
+                            if (inward) Direction.UP else Direction.DOWN
+                        ) }
                     )
 
                     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).then(gestureModifier)) {
-                        if (storageError != null) Text(storageError!!, color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
-                            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
-
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
                             // Clip each workspace page while it moves through the pager.
                             Box(Modifier.fillMaxSize().graphicsLayer { clip = true }
@@ -614,7 +658,7 @@ fun LauncherApp(
                                         Column(Modifier.fillMaxSize()) {
                                             // Multi-page desktop pagination header
                                             val pageCount = state.prefs.desktop.pageCount
-                                            if (pageCount > 1) {
+                                            if (pageCount > 1 && state.prefs.behavior.pageIndicators) {
                                                 Row(
                                                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
                                                     horizontalArrangement = Arrangement.Center,
@@ -889,6 +933,7 @@ internal fun FloatingDock(
         .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)) {
         val positionedDock = state.positions.any { it.container == "dock" }
         val dockKeys = state.workspaceKeys("dock")
+        val dockRows = state.workspacePositions("dock", 1, MAX_LAYOUT_APPS).associate { it.key to it.row }
         val totalItems = (if (positionedDock) dockKeys.size else entries.size + folders.size) + (if (prefs.allApps) 1 else 0) + (if (gap) 1 else 0)
         val itemHeight = (56 * prefs.iconScale + if (prefs.labels) 36 else 16).dp
         val estimatedHeight = (totalItems.coerceIn(1, prefs.maxItems) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
@@ -913,9 +958,15 @@ internal fun FloatingDock(
                     }
                 }
                 if (prefs.allApps && prefs.allAppsLeft) allAppsButton()
-                if (positionedDock) dockKeys.forEach { itemKey ->
-                    key(itemKey) { WorkspaceEntry(itemKey, "dock", state, apps, repository, grid, badges, actions,
-                        Modifier.fillMaxWidth().height(itemHeight)) }
+                if (positionedDock) {
+                    var nextDockRow = 0
+                    dockKeys.forEach { itemKey ->
+                        val row = dockRows[itemKey] ?: nextDockRow
+                        repeat((row - nextDockRow).coerceAtLeast(0)) { Spacer(Modifier.height(itemHeight)) }
+                        key(itemKey) { WorkspaceEntry(itemKey, "dock", state, apps, repository, grid, badges, actions,
+                            Modifier.fillMaxWidth().height(itemHeight)) }
+                        nextDockRow = row + 1
+                    }
                 } else {
                 preview.forEachIndexed { index, app ->
                     if (gap && index == to) Spacer(Modifier.height(itemHeight))
