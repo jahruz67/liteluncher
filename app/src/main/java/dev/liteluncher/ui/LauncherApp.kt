@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -477,7 +478,7 @@ fun LauncherApp(
                             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
 
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
-                            // Keep every part of a page, including Home's dock, in the same swipe layer.
+                            // Clip each workspace page while it moves through the pager.
                             Box(Modifier.fillMaxSize().graphicsLayer { clip = true }) {
                                 when (screen) {
                                     Screen.HOME -> HomeScreen(
@@ -488,7 +489,8 @@ fun LauncherApp(
                                         actions = actions,
                                         onEmpty = { emptyMenu = true },
                                         onDoubleTap = { perform(state.prefs.gestures[Gesture.DOUBLE_TAP] ?: GestureBinding()) },
-                                        onVoice = onVoice
+                                        onVoice = onVoice,
+                                        showDock = !horizontalPaging
                                     )
                                     Screen.APPS -> AppDrawer(
                                         state = state,
@@ -608,9 +610,27 @@ fun LauncherApp(
                             label = "Directional workspace"
                         ) { screen ->
                             if (horizontalPaging && screen == Screen.HOME) {
-                                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(),
-                                    beyondViewportPageCount = 1,
-                                    key = { horizontalScreens[it] }, userScrollEnabled = swipeWithPager && workspacePointerCount < 2 && drag.active == null) { page -> renderPage(horizontalScreens[page]) }
+                                Box(Modifier.fillMaxSize().clipToBounds()) {
+                                    HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(),
+                                        beyondViewportPageCount = 1,
+                                        key = { horizontalScreens[it] }, userScrollEnabled = swipeWithPager && workspacePointerCount < 2 && drag.active == null) { page -> renderPage(horizontalScreens[page]) }
+                                    val homePage = horizontalScreens.indexOf(Screen.HOME)
+                                    val dockHideProgress by remember(pager, homePage) {
+                                        derivedStateOf {
+                                            (kotlin.math.abs(pager.currentPage - homePage + pager.currentPageOffsetFraction) * 2f).coerceIn(0f, 1f)
+                                        }
+                                    }
+                                    if (state.prefs.dock.enabled) {
+                                        val left = state.prefs.dock.side == "Left"
+                                        Box(Modifier.align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
+                                            .graphicsLayer {
+                                                // Follow the finger without rebuilding the dock as it leaves or returns.
+                                                translationX = size.width * dockHideProgress * if (left) -1f else 1f
+                                            }) {
+                                            FloatingDock(state, apps, model.apps, badges, actions)
+                                        }
+                                    }
+                                }
                             } else renderPage(screen)
                         }
 

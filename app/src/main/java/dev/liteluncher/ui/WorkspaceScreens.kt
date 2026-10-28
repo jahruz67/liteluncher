@@ -65,7 +65,8 @@ fun HomeScreen(
     actions: WorkspaceActions,
     onEmpty: () -> Unit,
     onDoubleTap: () -> Unit,
-    onVoice: (() -> Unit)? = null
+    onVoice: (() -> Unit)? = null,
+    showDock: Boolean = true
 ) {
     val prefs = state.prefs.home
     val appsByKey = remember(apps) { apps.associateBy { it.key } }
@@ -189,7 +190,7 @@ fun HomeScreen(
             Spacer(Modifier.height(8.dp))
         }
     }
-        if (state.prefs.dock.enabled) {
+        if (showDock && state.prefs.dock.enabled) {
             Box(Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)) {
                 FloatingDock(state, apps, repository, badges, actions)
             }
