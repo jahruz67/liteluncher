@@ -33,9 +33,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -102,14 +104,24 @@ fun SearchScreen(
             .sortedBy { if (it.label.startsWith(search, true)) 0 else 1 }.take(prefs.grid.rows * prefs.grid.columns) else emptyList()
     }
     val contacts by produceState<List<ContactEntry>>(emptyList(), search, prefs.contacts, permissionSignal) {
-        value = if (prefs.contacts && search.isNotBlank()) withContext(Dispatchers.IO) { repository.contacts(search).take(15) } else emptyList()
+        value = emptyList()
+        if (prefs.contacts && search.isNotBlank()) {
+            delay(150)
+            value = withContext(Dispatchers.IO) { repository.contacts(search, limit = 15) }
+        }
     }
-    val allShortcuts by produceState<List<NativeShortcut>>(emptyList(), apps, prefs.shortcuts, permissionSignal) {
-        value = if (prefs.shortcuts) withContext(Dispatchers.IO) { apps.flatMap { app -> repository.shortcuts(app) }.take(300) } else emptyList()
+    val shortcutRevision by repository.shortcutRevision.collectAsStateWithLifecycle()
+    val allShortcuts by produceState<List<NativeShortcut>>(emptyList(), apps, prefs.shortcuts, permissionSignal, shortcutRevision) {
+        value = if (prefs.shortcuts) withContext(Dispatchers.IO) {
+            repository.shortcuts(apps)
+        } else emptyList()
     }
-    val shortcuts = remember(allShortcuts, search, state.hiddenApps, prefs.hiddenApps, apps) {
-        if (search.isBlank()) emptyList() else allShortcuts.filter { shortcut -> shortcut.label.contains(search, true) &&
-            (prefs.hiddenApps || apps.none { it.packageName == shortcut.packageName && it.user == shortcut.user && it.key in state.hiddenApps }) }.take(12)
+    val hiddenShortcutApps = remember(apps, state.hiddenApps) {
+        apps.asSequence().filter { it.key in state.hiddenApps }.map { it.packageName to it.user }.toSet()
+    }
+    val shortcuts = remember(allShortcuts, search, hiddenShortcutApps, prefs.hiddenApps) {
+        if (search.isBlank()) emptyList() else allShortcuts.asSequence().filter { shortcut -> shortcut.label.contains(search, true) &&
+            (prefs.hiddenApps || (shortcut.packageName to shortcut.user) !in hiddenShortcutApps) }.take(12).toList()
     }
     val calculation = remember(search, prefs.math) { if (prefs.math && search.isNotBlank()) SearchEngine.calculate(search) else null }
     val settings = if (prefs.settings && search.isNotBlank()) SearchEngine.settingTargets.filter { it.title.contains(search, true) } else emptyList()

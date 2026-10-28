@@ -7,8 +7,11 @@ import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.LauncherApps
+import android.content.res.Configuration
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
@@ -41,7 +44,14 @@ class WidgetController(
     private val users = requireNotNull(activity.getSystemService(UserManager::class.java))
     private val launcher = requireNotNull(activity.getSystemService(LauncherApps::class.java))
     private val journal = activity.getSharedPreferences("widget_host_pending", Context.MODE_PRIVATE)
-    private val nativeHost = LauncherWidgetHost(activity, HOST_ID)
+    private val mutableProviderChanges = MutableStateFlow(0)
+    internal val providerChanges = mutableProviderChanges.asStateFlow()
+    private val providerPaddings = mutableMapOf<ComponentName, Rect>()
+    private var paddingConfiguration = Configuration(activity.resources.configuration)
+    private var paddingRevision = 0
+    private val nativeHost = LauncherWidgetHost(activity, HOST_ID) {
+        mutableProviderChanges.value += 1
+    }
     val host: AppWidgetHost = nativeHost
     private var pending: Pending? = null
     private var restored = false
@@ -54,6 +64,7 @@ class WidgetController(
     private var cellWidthDp = 80f
     private var cellHeightDp = 80f
     private var layoutItems = emptyList<WidgetItem>()
+    private var cachedPlacementLayout: PlacementLayout? = null
     private var currentPage = 0
     private val mutableRefreshes = MutableStateFlow<Map<Int, Int>>(emptyMap())
     internal val refreshes = mutableRefreshes.asStateFlow()
@@ -64,6 +75,10 @@ class WidgetController(
         val stage: String,
         val pin: LauncherApps.PinItemRequest? = null,
         val location: WidgetItem? = null
+    )
+
+    private data class PlacementLayout(
+        val items: List<WidgetItem>, val columns: Int, val rows: Int, val page: Int, val layout: WidgetGrid.Layout
     )
 
     private val bindLauncher = activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -135,9 +150,10 @@ class WidgetController(
     // when adding and completing a widget.
     fun providers(): List<AppWidgetProviderInfo> = runCatching {
         if (!users.isUserUnlocked(Process.myUserHandle())) return@runCatching emptyList<AppWidgetProviderInfo>()
-        manager.getInstalledProvidersForProfile(Process.myUserHandle()).sortedBy {
-            runCatching { it.loadLabel(activity.packageManager) }.getOrDefault(it.provider.packageName).lowercase()
-        }
+        manager.getInstalledProvidersForProfile(Process.myUserHandle()).map { provider ->
+            provider to runCatching { provider.loadLabel(activity.packageManager) }
+                .getOrDefault(provider.provider.packageName).lowercase()
+        }.sortedBy { it.second }.map { it.first }
     }.getOrDefault(emptyList())
 
     fun add(provider: AppWidgetProviderInfo, location: WidgetItem? = null) {
@@ -232,6 +248,11 @@ class WidgetController(
             }
         }
         // The callback owns persistence; keep the id pending until it has been delivered.
+        synchronized(additionLock) {
+            inFlightAdditions += item.id
+            journal.edit().putStringSet("uncommitted",
+                journal.getStringSet("uncommitted", emptySet()).orEmpty() + item.id.toString()).apply()
+        }
         try {
             onAdded(item)
             layoutItems = layoutItems.filterNot { it.id == item.id } + item
@@ -239,6 +260,7 @@ class WidgetController(
             journal.edit().remove("id").apply()
         } catch (error: Exception) {
             cancelPending()
+            finishAddition(item.id, saved = false)
             SystemActions.error(activity, "The widget could not be saved.")
         }
     }
@@ -252,9 +274,22 @@ class WidgetController(
             !users.isQuietModeEnabled(provider.profile)
     }.getOrDefault(false)
 
+    private fun defaultPadding(info: AppWidgetProviderInfo): Rect {
+        val configuration = activity.resources.configuration
+        val revision = mutableProviderChanges.value
+        if (paddingConfiguration != configuration || paddingRevision != revision) {
+            providerPaddings.clear()
+            paddingConfiguration = Configuration(configuration)
+            paddingRevision = revision
+        }
+        return providerPaddings.getOrPut(info.provider) {
+            AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
+        }
+    }
+
     internal fun placement(id: Int, info: AppWidgetProviderInfo, location: WidgetItem? = null): WidgetItem? {
         val density = activity.resources.displayMetrics.density
-        val padding = AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
+        val padding = defaultPadding(info)
         val width = ceil((info.minWidth + padding.left + padding.right) / density / cellWidthDp).toInt().coerceAtLeast(1)
         val height = ceil((info.minHeight + padding.top + padding.bottom) / density / cellHeightDp).toInt().coerceAtLeast(1)
         val desiredColumns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && info.targetCellWidth > 0) info.targetCellWidth else width
@@ -262,7 +297,11 @@ class WidgetController(
         val minimum = minimumSpan(info)
         if (minimum.first > columns || minimum.second > rows) return null
         val page = location?.page ?: currentPage
-        val occupied = WidgetGrid.arrange(layoutItems.filter { it.page == page }, columns, rows)
+        val occupied = cachedPlacementLayout?.takeIf {
+            it.columns == columns && it.rows == rows && it.page == page && it.items == layoutItems
+        }?.layout ?: WidgetGrid.arrange(layoutItems.filter { it.page == page }, columns, rows).also {
+            cachedPlacementLayout = PlacementLayout(layoutItems, columns, rows, page, it)
+        }
         if (occupied.overflow.isNotEmpty()) return null
         val maximum = maximumSpan(info)
         val maxColumns = desiredColumns.coerceIn(minimum.first, maximum.first)
@@ -278,32 +317,37 @@ class WidgetController(
         return null
     }
 
-    internal fun minimumSpan(info: AppWidgetProviderInfo): Pair<Int, Int> {
+    internal fun minimumSpan(
+        info: AppWidgetProviderInfo, widthDp: Float = cellWidthDp, heightDp: Float = cellHeightDp
+    ): Pair<Int, Int> {
         val density = activity.resources.displayMetrics.density
-        val padding = AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
+        val padding = defaultPadding(info)
         val width = if (info.resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL != 0 && info.minResizeWidth > 0) info.minResizeWidth else info.minWidth
         val height = if (info.resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL != 0 && info.minResizeHeight > 0) info.minResizeHeight else info.minHeight
-        return ceil((width + padding.left + padding.right) / density / cellWidthDp).toInt().coerceAtLeast(1) to
-            ceil((height + padding.top + padding.bottom) / density / cellHeightDp).toInt().coerceAtLeast(1)
+        return ceil((width + padding.left + padding.right) / density / widthDp).toInt().coerceAtLeast(1) to
+            ceil((height + padding.top + padding.bottom) / density / heightDp).toInt().coerceAtLeast(1)
     }
 
-    internal fun maximumSpan(info: AppWidgetProviderInfo): Pair<Int, Int> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return columns to rows
+    internal fun maximumSpan(
+        info: AppWidgetProviderInfo, widthDp: Float = cellWidthDp, heightDp: Float = cellHeightDp,
+        gridColumns: Int = columns, gridRows: Int = rows
+    ): Pair<Int, Int> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return gridColumns to gridRows
         val density = activity.resources.displayMetrics.density
-        val padding = AppWidgetHostView.getDefaultPaddingForWidget(activity, info.provider, null)
-        val min = minimumSpan(info)
+        val padding = defaultPadding(info)
+        val min = minimumSpan(info, widthDp, heightDp)
         val width = if (info.maxResizeWidth > 0) {
-            kotlin.math.floor((info.maxResizeWidth + padding.left + padding.right) / density / cellWidthDp)
+            kotlin.math.floor((info.maxResizeWidth + padding.left + padding.right) / density / widthDp)
                 .toInt().coerceAtLeast(min.first)
-        } else columns
+        } else gridColumns
         val height = if (info.maxResizeHeight > 0) {
-            kotlin.math.floor((info.maxResizeHeight + padding.top + padding.bottom) / density / cellHeightDp)
+            kotlin.math.floor((info.maxResizeHeight + padding.top + padding.bottom) / density / heightDp)
                 .toInt().coerceAtLeast(min.second)
-        } else rows
-        return width.coerceAtMost(columns) to height.coerceAtMost(rows)
+        } else gridRows
+        return width.coerceAtMost(gridColumns) to height.coerceAtMost(gridRows)
     }
 
-    /** Seed this when opening a picker before WidgetCanvas has ever been composed. */
+    /** The workspace owns the complete layout snapshot and selected page. */
     fun updateLayout(prefs: DesktopPrefs, widgets: List<WidgetItem>, page: Int = currentPage) {
         columns = prefs.columns.coerceIn(1, 24)
         rows = prefs.rows.coerceIn(1, 32)
@@ -311,10 +355,9 @@ class WidgetController(
         currentPage = page.coerceIn(0, prefs.pageCount.coerceAtLeast(1) - 1)
     }
 
-    internal fun syncLayout(prefs: DesktopPrefs, items: List<WidgetItem>, widthDp: Float, heightDp: Float) {
-        updateLayout(prefs, items)
-        cellWidthDp = (widthDp / columns).coerceAtLeast(1f)
-        cellHeightDp = (heightDp / rows).coerceAtLeast(1f)
+    internal fun syncGeometry(prefs: DesktopPrefs, widthDp: Float, heightDp: Float) {
+        cellWidthDp = (widthDp / prefs.columns.coerceIn(1, 24)).coerceAtLeast(1f)
+        cellHeightDp = (heightDp / prefs.rows.coerceIn(1, 32)).coerceAtLeast(1f)
     }
 
     internal fun provider(id: Int): AppWidgetProviderInfo? = runCatching {
@@ -346,6 +389,30 @@ class WidgetController(
         journal.edit().putStringSet("removed", journal.getStringSet("removed", emptySet()).orEmpty() + id.toString()).apply()
     }
 
+    /** Failed saves stay journaled so startup can retry Android resource cleanup. */
+    fun finishAddition(id: Int, saved: Boolean = true) {
+        synchronized(additionLock) {
+            inFlightAdditions -= id
+            if (saved) {
+                journal.edit().putStringSet("uncommitted",
+                    journal.getStringSet("uncommitted", emptySet()).orEmpty() - id.toString()).apply()
+            }
+        }
+    }
+
+    /** Reconcile after loading persisted widgets; saves survive activity recreation. */
+    fun finishAdditions(activeIds: Set<Int>) {
+        val abandoned = synchronized(additionLock) {
+            journal.getStringSet("uncommitted", emptySet()).orEmpty()
+                .mapNotNull { it.toIntOrNull() }.filterNot { it in inFlightAdditions }
+        }
+        abandoned.forEach { id ->
+            if (id in activeIds || runCatching { host.deleteAppWidgetId(id) }.isSuccess) {
+                finishAddition(id)
+            }
+        }
+    }
+
     fun finishRemovals(activeIds: Set<Int>) {
         journal.getStringSet("removed", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.forEach { id ->
             if (id in activeIds) cancelRemoval(id) else remove(id)
@@ -370,6 +437,7 @@ class WidgetController(
             SystemActions.error(activity, "Android could not start widget updates.")
             false
         }
+        if (listening) mutableProviderChanges.value += 1
     }
 
     fun stop() {
@@ -383,7 +451,11 @@ class WidgetController(
      * confirmations use this call's callback; an in-progress widget is never restarted.
      * True means a recognized request was handled or shown, not that the user accepted it.
      */
-    fun acceptPin(intent: Intent, onShortcut: (PinnedShortcut) -> Unit): Boolean {
+    fun acceptPin(
+        intent: Intent,
+        shortcutError: (PinnedShortcut) -> String? = { null },
+        onShortcut: (PinnedShortcut) -> Unit
+    ): Boolean {
         restorePending()
         if (closed) return false
         val pinIntent = intent.action == LauncherApps.ACTION_CONFIRM_PIN_SHORTCUT ||
@@ -410,10 +482,16 @@ class WidgetController(
                 }.getOrDefault(-1L)
                 if (serial < 0) return false
                 val label = shortcut.shortLabel?.toString() ?: shortcut.id
+                val pinned = PinnedShortcut(shortcut.id, shortcut.`package`, label, serial)
                 showPinDialog(request, "Add shortcut?", "$label\n${shortcut.`package`}") {
+                    val error = shortcutError(pinned)
+                    if (error != null) {
+                        SystemActions.error(activity, error)
+                        return@showPinDialog
+                    }
                     val accepted = runCatching { request.isValid && request.accept() }.getOrDefault(false)
                     if (accepted) {
-                        runCatching { onShortcut(PinnedShortcut(shortcut.id, shortcut.`package`, label, serial)) }
+                        runCatching { onShortcut(pinned) }
                             .onFailure { SystemActions.error(activity, "The shortcut was pinned but could not be saved.") }
                     } else SystemActions.error(activity, "The shortcut pin request is no longer available.")
                 }
@@ -494,7 +572,8 @@ class WidgetController(
                 ?.takeIf { runCatching { it.isValid }.getOrDefault(false) }
         }
         val orphan = journal.getInt("id", AppWidgetManager.INVALID_APPWIDGET_ID)
-        if (orphan != AppWidgetManager.INVALID_APPWIDGET_ID && orphan != pending?.id) {
+        val awaitingSave = journal.getStringSet("uncommitted", emptySet()).orEmpty().contains(orphan.toString())
+        if (orphan != AppWidgetManager.INVALID_APPWIDGET_ID && orphan != pending?.id && !awaitingSave) {
             runCatching { host.deleteAppWidgetId(orphan) }
         }
         if (pending == null) journal.edit().remove("id").apply()
@@ -527,12 +606,24 @@ class WidgetController(
         const val CONFIGURE_REQUEST_CODE = 0x4C49
         const val BINDING = "bind"
         const val CONFIGURING = "configure"
+        val additionLock = Any()
+        val inFlightAdditions = mutableSetOf<Int>()
     }
 }
 
-private class LauncherWidgetHost(context: Context, id: Int) : AppWidgetHost(context, id) {
+private class LauncherWidgetHost(context: Context, id: Int, private val onProviderChange: () -> Unit) : AppWidgetHost(context, id) {
     override fun onCreateView(context: Context, appWidgetId: Int, appWidget: AppWidgetProviderInfo): AppWidgetHostView =
         LauncherWidgetHostView(context)
+
+    override fun onProviderChanged(appWidgetId: Int, appWidget: AppWidgetProviderInfo) {
+        super.onProviderChanged(appWidgetId, appWidget)
+        onProviderChange()
+    }
+
+    override fun onProvidersChanged() {
+        super.onProvidersChanged()
+        onProviderChange()
+    }
 
     fun releaseViews() = clearViews()
 }

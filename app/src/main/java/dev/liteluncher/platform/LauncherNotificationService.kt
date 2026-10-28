@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Process
+import android.os.UserHandle
 import android.os.UserManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -80,15 +81,16 @@ class LauncherNotificationService : NotificationListenerService() {
                 runCatching { users.isUserUnlocked(user) && !users.isQuietModeEnabled(user) }.getOrDefault(false)
             }.toSet()
         }.getOrDefault(setOf(Process.myUserHandle()))
-        val visible = records.values.filter { sbn ->
+        val rank = Ranking()
+        val visible = records.values.asSequence().filter { sbn ->
             if (sbn.user !in allowed) return@filter false
-            val rank = Ranking()
             val badgeAllowed = rankingMap == null || !rankingMap.getRanking(sbn.key, rank) || rank.canShowBadge()
             val flags = sbn.notification.flags
             badgeAllowed && flags and Notification.FLAG_ONGOING_EVENT == 0 &&
                 flags and Notification.FLAG_NO_CLEAR == 0
         }
         val result = mutableMapOf<String, Int>()
+        val serials = mutableMapOf<UserHandle, Long>()
         visible.groupBy { it.packageName to it.user }.forEach { (identity, notifications) ->
             // Group summaries count only when no child is present. A summary's number is
             // otherwise commonly a duplicate of its children's unread counts.
@@ -99,7 +101,9 @@ class LauncherNotificationService : NotificationListenerService() {
             }.coerceAtMost(9999)
             if (total > 0) {
                 val (packageName, user) = identity
-                val serial = runCatching { users.getSerialNumberForUser(user) }.getOrDefault(-1L)
+                val serial = serials.getOrPut(user) {
+                    runCatching { users.getSerialNumberForUser(user) }.getOrDefault(-1L)
+                }
                 if (serial >= 0) result[badgeKey(packageName, serial)] = total
                 // Bare package entries refer only to the current user; work badges stay separate.
                 if (user == Process.myUserHandle()) result[packageName] = total

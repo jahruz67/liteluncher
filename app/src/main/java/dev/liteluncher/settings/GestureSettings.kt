@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
@@ -218,9 +219,10 @@ private fun AppShortcutChooserDialog(
 ) {
     var pickedApp by remember { mutableStateOf(apps.firstOrNull { it.key == selectedAppKey }) }
     val context = LocalContext.current
-    val shortcuts by produceState<List<ShortcutInfo>>(emptyList(), pickedApp) {
+    val selectedApp = pickedApp
+    val shortcuts by key(selectedApp?.key) { produceState<List<ShortcutInfo>>(emptyList()) {
         value = withContext(Dispatchers.IO) {
-            val app = pickedApp ?: return@withContext emptyList()
+            val app = selectedApp ?: return@withContext emptyList()
             val launcher = context.getSystemService(LauncherApps::class.java) ?: return@withContext emptyList()
             runCatching {
                 val query = LauncherApps.ShortcutQuery().apply {
@@ -230,12 +232,12 @@ private fun AppShortcutChooserDialog(
                 launcher.getShortcuts(query, app.user).orEmpty()
             }.getOrDefault(emptyList())
         }
-    }
+    } }
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(20.dp), color = SettingsPanel,
             modifier = Modifier.fillMaxWidth().fillMaxHeight(.8f)) {
             Column(Modifier.padding(16.dp)) {
-                if (pickedApp == null) {
+                if (selectedApp == null) {
                     Text("Choose an app", style = MaterialTheme.typography.titleMedium)
                     LazyColumn(Modifier.weight(1f)) {
                         items(apps.sortedBy { it.label.lowercase(Locale.ROOT) }, key = { it.key }) { app ->
@@ -243,14 +245,14 @@ private fun AppShortcutChooserDialog(
                         }
                     }
                 } else {
-                    Text(pickedApp!!.label, style = MaterialTheme.typography.titleMedium)
+                    Text(selectedApp.label, style = MaterialTheme.typography.titleMedium)
                     if (shortcuts.isEmpty()) {
                         Text("No shortcuts available for this app.", modifier = Modifier.padding(vertical = 16.dp))
                     } else {
                         LazyColumn(Modifier.weight(1f)) {
                             items(shortcuts, key = { it.id }) { shortcut ->
                                 Text(shortcut.shortLabel?.toString() ?: shortcut.id,
-                                    modifier = Modifier.fillMaxWidth().clickable { onSelect(pickedApp!!, shortcut.id) }.padding(vertical = 10.dp))
+                                    modifier = Modifier.fillMaxWidth().clickable { onSelect(selectedApp, shortcut.id) }.padding(vertical = 10.dp))
                             }
                         }
                     }

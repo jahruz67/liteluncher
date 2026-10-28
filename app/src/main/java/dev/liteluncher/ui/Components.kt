@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.AppEntry
 import dev.liteluncher.platform.AppsRepository
@@ -56,8 +57,9 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
     val context = LocalContext.current
     val override = state.overrides[app.key]
     val pack = state.prefs.appearance.iconPack
+    val iconRevision by repository.iconRevision.collectAsStateWithLifecycle()
     val cached = if (override?.iconUri.isNullOrBlank()) repository.cachedIconBitmap(app, pack) else null
-    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, override?.iconUri, pack) {
+    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, override?.iconUri, pack, iconRevision) {
         value = withContext(Dispatchers.IO) {
             val custom = override?.iconUri?.takeIf { it.startsWith("content://") }?.let { uri ->
                 runCatching {
@@ -124,7 +126,9 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
         val shape = iconShape(folder.shape ?: state.prefs.folders.shape)
         Box(Modifier.size(size).clip(shape)
             .background(folderColor.copy(alpha = folderColor.alpha * state.prefs.folders.opacity)), contentAlignment = Alignment.Center) {
-            val members = folder.apps.mapNotNull { key -> apps.find { it.key == key } }.take(4)
+            val members = remember(folder.apps, apps) {
+                folder.apps.asSequence().mapNotNull { key -> apps.find { it.key == key } }.take(4).toList()
+            }
             if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = Cerulean)
             else if (state.prefs.folders.stacked) {
                 members.take(3).reversed().forEachIndexed { index, app ->

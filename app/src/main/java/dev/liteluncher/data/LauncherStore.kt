@@ -43,6 +43,8 @@ class LauncherStore(context: Context) {
     private val mutableState = MutableStateFlow(LauncherState())
     private val mutableReady = MutableStateFlow(false)
     private val mutableError = MutableStateFlow<String?>(null)
+    // Accessed only by the command worker; raw JSON remains the transaction's source of truth.
+    private var cachedSnapshot: Pair<String, LauncherState>? = null
 
     val state: StateFlow<LauncherState> = mutableState.asStateFlow()
     /** True once persisted preferences have been loaded or recovered successfully. */
@@ -93,7 +95,13 @@ class LauncherStore(context: Context) {
                             try {
                                 // Decode and sanitize completely before opening the write transaction.
                                 val imported = decode(command.json, portable = true)
-                                commit { local -> imported.copy(widgets = local.widgets) }
+                                commit { local ->
+                                    val pageCount = maxOf(imported.prefs.desktop.pageCount,
+                                        (local.widgets.maxOfOrNull { it.page } ?: -1) + 1)
+                                    imported.copy(widgets = local.widgets, prefs = imported.prefs.copy(
+                                        desktop = imported.prefs.desktop.copy(pageCount = pageCount)
+                                    ))
+                                }
                                 command.result.complete(Result.success(Unit))
                             } catch (cancelled: CancellationException) {
                                 command.result.completeExceptionally(cancelled)
@@ -202,20 +210,28 @@ class LauncherStore(context: Context) {
 
     private suspend fun commit(transform: (LauncherState) -> LauncherState) {
         var committed: LauncherState? = null
+        var committedJson: String? = null
         dataStore.edit { preferences ->
             // Read inside the transaction so even a second store cannot overwrite newer data.
-            val current = decodeStored(preferences[SNAPSHOT])
-            val next = sanitize(transform(current))
-            preferences[SNAPSHOT] = encode(next)
+            val raw = preferences[SNAPSHOT]
+            val current = decodeStored(raw)
+            val transformed = transform(current)
+            val next = if (transformed == current) current else sanitize(transformed)
+            val json = if (next == current && cachedSnapshot?.first == raw && raw != null) raw else encode(next)
+            if (json != raw) preferences[SNAPSHOT] = json
             committed = next
+            committedJson = json
         }
-        mutableState.value = checkNotNull(committed)
+        val next = checkNotNull(committed)
+        cachedSnapshot = checkNotNull(committedJson) to next
+        mutableState.value = next
         mutableReady.value = true
         mutableError.value = null
     }
 
     private fun decodeStored(raw: String?): LauncherState {
         if (raw == null) return LauncherState()
+        cachedSnapshot?.let { (json, state) -> if (json == raw) return state }
         return try {
             decode(raw, portable = false)
         } catch (failure: Exception) {

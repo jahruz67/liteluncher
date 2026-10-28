@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -39,6 +40,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
 import kotlinx.coroutines.Dispatchers
@@ -64,8 +68,10 @@ fun HomeScreen(
     onVoice: (() -> Unit)? = null
 ) {
     val prefs = state.prefs.home
-    val selected = state.homeApps.mapNotNull { key -> apps.find { it.key == key } }
-    val folders = state.homeFolders.mapNotNull { id -> state.folders.find { it.id == id } }
+    val appsByKey = remember(apps) { apps.associateBy { it.key } }
+    val selected = remember(state.homeApps, appsByKey) { state.homeApps.mapNotNull(appsByKey::get) }
+    val foldersById = remember(state.folders) { state.folders.associateBy { it.id } }
+    val folders = remember(state.homeFolders, foldersById) { state.homeFolders.mapNotNull(foldersById::get) }
     val context = LocalContext.current
     val showSearchBar = Screen.HOME in state.prefs.search.barScreens
     val barAtBottom = state.prefs.search.barAtBottom
@@ -124,10 +130,13 @@ fun HomeScreen(
                     FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, actions.manageLayout, Modifier.fillMaxWidth().height(if (prefs.listMode) 88.dp else rowHeight))
                 }
                 items(state.shortcuts.take((slotCount - selected.size - folders.size).coerceAtLeast(0)), key = { "shortcut:${it.packageName}:${it.id}:${it.userSerial}" }) { shortcut ->
-                    val user = requireNotNull(context.getSystemService(android.os.UserManager::class.java)).getUserForSerialNumber(shortcut.userSerial)
-                    val app = apps.firstOrNull { it.packageName == shortcut.packageName && it.user == user }
+                    val app = remember(apps, shortcut.packageName, shortcut.userSerial) {
+                        apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
+                    }
                     Column(
                         Modifier.height(if (prefs.listMode) 88.dp else rowHeight).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = {
+                            val user = app?.user ?: context.getSystemService(android.os.UserManager::class.java)
+                                ?.getUserForSerialNumber(shortcut.userSerial)
                             if (user != null) repository.launchShortcut(NativeShortcut(shortcut.id, shortcut.packageName, shortcut.label, user))
                             else android.widget.Toast.makeText(context, "This shortcut's profile is unavailable", android.widget.Toast.LENGTH_SHORT).show()
                         }, onLongClick = { actions.update { current ->
@@ -172,7 +181,16 @@ fun HomeScreen(
 @Composable
 internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
     var now by remember { mutableStateOf(ZonedDateTime.now()) }
-    LaunchedEffect(Unit) { while (true) { now = ZonedDateTime.now(); delay(1000) } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, prefs.analog) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val interval = if (prefs.analog) 1_000L else 60_000L
+            while (true) {
+                now = ZonedDateTime.now()
+                delay(interval - System.currentTimeMillis() % interval)
+            }
+        }
+    }
     val context = LocalContext.current
     val color = parseColor(prefs.color, Mist)
     val font = when (prefs.font) {
@@ -185,14 +203,13 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
     val clockShadow = Shadow(color = Color(0x40000000), offset = Offset(0f, 4f), blurRadius = 8f)
 
     val onClockClick: () -> Unit = {
-        if (clockApp.isNotBlank() && clockApp != "Clock") {
-            val pm = context.packageManager
-            val intent = pm.getLaunchIntentForPackage(clockApp)
-            if (intent != null) context.startActivity(intent)
-            else SystemActions.open(context, Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS))
-        } else {
-            SystemActions.open(context, Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS))
+        val launched = when {
+            '|' in clockApp -> SystemActions.openLauncherApp(context, clockApp)
+            clockApp.isNotBlank() && clockApp != "Clock" -> context.packageManager.getLaunchIntentForPackage(clockApp)
+                ?.let { SystemActions.open(context, it) } ?: false
+            else -> false
         }
+        if (!launched) SystemActions.open(context, Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS))
     }
 
     Column(modifier.fillMaxWidth().padding(start = 12.dp, top = 16.dp, bottom = 28.dp)) {
@@ -284,11 +301,16 @@ fun AppDrawer(
 ) {
     var filter by rememberSaveable { mutableStateOf("") }
     val prefs = state.prefs.drawer
-    val collator = remember { Collator.getInstance() }
-    val rows = remember(apps, state.hiddenApps, state.overrides, filter) {
-        val sorted = apps.filter { it.key !in state.hiddenApps && (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(filter, true) }
+    val locale = LocalConfiguration.current.locales[0]
+    val collator = remember(locale) { Collator.getInstance(locale) }
+    val sortedApps = remember(apps, state.hiddenApps, state.overrides, collator) {
+        apps.filter { it.key !in state.hiddenApps }
             .sortedWith { a, b -> collator.compare(state.overrides[a.key]?.label?.ifBlank { a.label } ?: a.label, state.overrides[b.key]?.label?.ifBlank { b.label } ?: b.label) }
-        val grouped = sorted.groupBy { app ->
+    }
+    val rows = remember(sortedApps, state.overrides, filter) {
+        val grouped = sortedApps.filter {
+            (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(filter, true)
+        }.groupBy { app ->
             val first = (state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label).firstOrNull()?.uppercaseChar()
             when {
                 first == null -> "#"
@@ -301,7 +323,7 @@ fun AppDrawer(
     }
     val grid = rememberLazyGridState()
     val scope = rememberCoroutineScope()
-    val letters = listOf("#", "1") + ('A'..'Z').map { it.toString() }
+    val letters = remember { listOf("#", "1") + ('A'..'Z').map { it.toString() } }
     val positions = remember(rows) { rows.mapIndexedNotNull { i, row -> (row as? DrawerRow.Header)?.let { it.letter to i } }.toMap() }
     var scrubLetter by remember { mutableStateOf<String?>(null) }
     var scrubY by remember { mutableFloatStateOf(0f) }
@@ -360,8 +382,11 @@ fun AppDrawer(
                         change.consume()
                         val idx = (change.position.y / size.height * letters.size).toInt().coerceIn(0, letters.lastIndex)
                         scrubY = change.position.y.coerceIn(0f, size.height.toFloat())
-                        scrubLetter = letters[idx]
-                        scrollTo(letters[idx])
+                        val letter = letters[idx]
+                        if (scrubLetter != letter) {
+                            scrubLetter = letter
+                            scrollTo(letter)
+                        }
                     })
                 },
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -430,9 +455,10 @@ fun FavoritesScreen(
         } else {
             apps.sortedBy { it.label.lowercase(Locale.ROOT) }.map { it.key }
         }
-        val combined = (state.favoriteApps + baseList).distinct().filter { it !in excluded }.take(prefs.maxItems)
+        val available = apps.associateBy { it.key }
+        val combined = (state.favoriteApps + baseList).distinct().filter { it !in excluded && it in available }.take(prefs.maxItems)
         val ordered = if (prefs.reverse) combined.reversed() else combined
-        ordered.mapNotNull { key -> apps.find { it.key == key } }
+        ordered.mapNotNull(available::get)
     }
 
     val context = LocalContext.current
@@ -440,9 +466,9 @@ fun FavoritesScreen(
     val contacts by produceState<List<ContactEntry>>(emptyList(), permissionSignal, prefs.showContacts) {
         value = if (permitted && prefs.showContacts) withContext(Dispatchers.IO) { repository.contacts() } else emptyList()
     }
-    val pinned by produceState<List<Pair<String, ContactEntry>>>(emptyList(), state.contacts, contacts, permissionSignal) {
+    val pinned by produceState<List<Pair<String, ContactEntry>>>(emptyList(), state.contacts, contacts, permissionSignal, prefs.showContacts) {
         val references = state.contacts
-        value = if (permitted) withContext(Dispatchers.IO) {
+        value = if (permitted && prefs.showContacts) withContext(Dispatchers.IO) {
             references.mapNotNull { reference ->
                 val resolved = runCatching {
                     android.provider.ContactsContract.Contacts.lookupContact(context.contentResolver, Uri.parse(reference))

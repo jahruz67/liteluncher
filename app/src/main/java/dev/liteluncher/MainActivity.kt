@@ -14,12 +14,16 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
-import dev.liteluncher.data.Screen
+import dev.liteluncher.data.LauncherState
+import dev.liteluncher.data.LayoutArea
+import dev.liteluncher.data.PinnedShortcut
+import dev.liteluncher.data.layoutSpace
 import dev.liteluncher.platform.SystemActions
 import dev.liteluncher.platform.WidgetController
 import dev.liteluncher.platform.WidgetGrid
 import dev.liteluncher.ui.LauncherApp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -77,21 +81,27 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         widgets = WidgetController(this) { item ->
             model.viewModelScope.launch {
-                val saved = model.store.updateAndAwait { state ->
-                    val columns = state.prefs.desktop.columns
-                    val rows = state.prefs.desktop.rows
-                    val width = item.columns
-                    val height = item.rows
-                    require(width in 1..columns && height in 1..rows) { "This widget no longer fits the desktop grid" }
-                    val others = state.widgets.filterNot { it.id == item.id }
-                    require(item.page in 0 until state.prefs.desktop.pageCount) { "This desktop page is no longer available" }
-                    val placed = WidgetGrid.place(item, others, columns, rows)
-                    requireNotNull(placed) { "The widget canvas is full. Resize or remove a widget first." }
-                    state.copy(widgets = others + placed)
-                }
-                saved.onFailure {
-                    widgets.remove(item.id)
-                    toast(it.message ?: "The widget could not be saved")
+                // Resolve the resource handoff even if the ViewModel is cleared mid-save.
+                withContext(NonCancellable) {
+                    val saved = runCatching {
+                        model.store.updateAndAwait { state ->
+                            val columns = state.prefs.desktop.columns
+                            val rows = state.prefs.desktop.rows
+                            val width = item.columns
+                            val height = item.rows
+                            require(width in 1..columns && height in 1..rows) { "This widget no longer fits the desktop grid" }
+                            val others = state.widgets.filterNot { it.id == item.id }
+                            require(item.page in 0 until state.prefs.desktop.pageCount) { "This desktop page is no longer available" }
+                            val placed = WidgetGrid.place(item, others, columns, rows)
+                            requireNotNull(placed) { "The widget canvas is full. Resize or remove a widget first." }
+                            state.copy(widgets = others + placed)
+                        }.getOrThrow()
+                    }
+                    saved.onFailure {
+                        widgets.remove(item.id)
+                        toast(it.message ?: "The widget could not be saved")
+                    }
+                    widgets.finishAddition(item.id, saved.isSuccess)
                 }
             }
         }
@@ -122,8 +132,29 @@ class MainActivity : ComponentActivity() {
         if (!handlePin(intent)) homeSignal++
     }
 
-    private fun handlePin(intent: Intent): Boolean = widgets.acceptPin(intent) { shortcut ->
-        model.store.update { state -> state.copy(shortcuts = state.shortcuts.filterNot { it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial } + shortcut) }
+    private fun handlePin(intent: Intent): Boolean = widgets.acceptPin(intent, shortcutError = { shortcut ->
+        if (!model.store.ready.value) "Launcher is still loading. Try adding the shortcut again."
+        else if (model.store.error.value != null) "Launcher preferences are unavailable. Try adding the shortcut after storage recovers."
+        else shortcutPinError(model.store.state.value, shortcut)
+    }) { shortcut ->
+        model.viewModelScope.launch {
+            model.store.updateAndAwait { state ->
+                val failure = shortcutPinError(state, shortcut)
+                require(failure == null) { failure.orEmpty() }
+                state.copy(shortcuts = state.shortcuts.filterNot {
+                    it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial
+                } + shortcut)
+            }.onFailure { toast(it.message ?: "The shortcut could not be saved") }
+        }
+    }
+
+    private fun shortcutPinError(state: LauncherState, shortcut: PinnedShortcut): String? {
+        if (state.prefs.home.preventChanges) return "Home is locked"
+        val alreadyPinned = state.shortcuts.any {
+            it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial
+        }
+        return if (!alreadyPinned && state.layoutSpace(LayoutArea.HOME) == 0)
+            "Home is full. Remove an entry or increase the grid size." else null
     }
 
     @Suppress("DEPRECATION")

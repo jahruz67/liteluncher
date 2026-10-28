@@ -48,6 +48,26 @@ jobs:
           echo "RELEASE_VERSION_NAME=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
           echo "RELEASE_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
 
+      - name: Verify release tag matches source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_ref="refs/tags/$RELEASE_TAG"
+          if git ls-remote --exit-code --refs origin "$tag_ref" > /dev/null; then
+            git fetch --no-tags origin "$tag_ref"
+            tag_commit=$(git rev-parse 'FETCH_HEAD^{commit}')
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::The release tag points to a different commit. Run this workflow using that tag as its ref."
+              exit 1
+            fi
+          else
+            status=$?
+            if (( status != 2 )); then
+              echo "::error::Unable to check the release tag."
+              exit "$status"
+            fi
+          fi
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:

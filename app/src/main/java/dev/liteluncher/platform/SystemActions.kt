@@ -4,10 +4,12 @@ import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.LauncherApps
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.UserManager
 import android.provider.Settings
 import android.widget.Toast
 
@@ -46,6 +48,19 @@ object SystemActions {
         error(context, "No available app can open this action.")
         return false
     }
+
+    fun openLauncherApp(context: Context, key: String): Boolean = runCatching {
+        val component = ComponentName.unflattenFromString(key.substringBeforeLast('|')) ?: return@runCatching false
+        val serial = key.substringAfterLast('|').toLongOrNull()?.takeIf { it >= 0 } ?: return@runCatching false
+        val users = context.getSystemService(UserManager::class.java) ?: return@runCatching false
+        val user = users.getUserForSerialNumber(serial) ?: return@runCatching false
+        if (user !in users.userProfiles || !users.isUserUnlocked(user) || users.isQuietModeEnabled(user)) {
+            return@runCatching false
+        }
+        val launcher = context.getSystemService(LauncherApps::class.java) ?: return@runCatching false
+        launcher.startMainActivity(component, user, null, null)
+        true
+    }.getOrDefault(false)
 
     private fun tryOpen(context: Context, intent: Intent): Boolean = runCatching {
         val launch = Intent(intent)

@@ -44,6 +44,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -61,8 +62,12 @@ import dev.liteluncher.settings.SettingsScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 
 data class WorkspaceActions(
     val launch: (AppEntry) -> Unit,
@@ -107,7 +112,7 @@ fun LauncherApp(
     var emptyMenu by remember { mutableStateOf(false) }
     var widgetPicker by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    var lastScroll by remember { mutableLongStateOf(0L) }
+    val scrollEvents = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST) }
     var scrolling by remember { mutableStateOf(false) }
     var dockAwake by remember { mutableStateOf(true) }
     var dockWakeSignal by remember { mutableIntStateOf(0) }
@@ -263,12 +268,20 @@ fun LauncherApp(
             }
         }
     }
-    LaunchedEffect(ready) {
-        if (ready) widgets.finishRemovals(state.widgets.mapTo(mutableSetOf()) { it.id })
+    LaunchedEffect(widgets) {
+        model.store.ready.first { it }
+        model.store.error.first { it == null }
+        val activeIds = model.store.state.value.widgets.mapTo(mutableSetOf()) { it.id }
+        widgets.finishRemovals(activeIds)
+        widgets.finishAdditions(activeIds)
     }
-    LaunchedEffect(permissionSignal, apps.size) {
-        usage = withContext(Dispatchers.IO) { model.apps.usage() }
-        iconPacks = withContext(Dispatchers.IO) { model.apps.iconPacks() }
+    val needsUsage = panel.isEmpty() && manager.current == Screen.FAVORITES && state.prefs.favorites.byUsage
+    LaunchedEffect(permissionSignal, apps, needsUsage) {
+        if (needsUsage) usage = withContext(Dispatchers.IO) { model.apps.usage() }
+    }
+    val needsIconPacks = panel == "settings"
+    LaunchedEffect(permissionSignal, apps, needsIconPacks) {
+        if (needsIconPacks) iconPacks = withContext(Dispatchers.IO) { model.apps.iconPacks() }
     }
     LaunchedEffect(homeSignal) {
         if (homeSignal > 0) {
@@ -290,7 +303,14 @@ fun LauncherApp(
     LaunchedEffect(state.prefs.desktop.pageCount) {
         currentDesktopPage = currentDesktopPage.coerceIn(0, state.prefs.desktop.pageCount.coerceAtLeast(1) - 1)
     }
-    LaunchedEffect(lastScroll) { if (lastScroll != 0L) { scrolling = true; delay(650); scrolling = false } }
+    LaunchedEffect(state.prefs.dock.enabled, state.prefs.dock.hideOnScroll) {
+        scrolling = false
+        if (state.prefs.dock.enabled && state.prefs.dock.hideOnScroll) scrollEvents.collectLatest {
+            scrolling = true
+            delay(650)
+            scrolling = false
+        }
+    }
     LaunchedEffect(manager.current, state.prefs.dock.autoHide, dockWakeSignal, drag.active != null) {
         dockAwake = true
         if (state.prefs.dock.autoHide && drag.active == null) { delay(3500); dockAwake = false }
@@ -306,26 +326,43 @@ fun LauncherApp(
         }
     }
 
-    SideEffect {
+    LaunchedEffect(widgets, ready, state.prefs.desktop, state.widgets, currentDesktopPage) {
         if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets, currentDesktopPage)
+    }
+    LaunchedEffect(activity, view, state.prefs.appearance.lightStatusIcons, state.prefs.appearance.lightNavigationIcons, state.prefs.behavior.showStatusBar) {
         val controller = WindowCompat.getInsetsController(activity.window, view)
         controller.isAppearanceLightStatusBars = !state.prefs.appearance.lightStatusIcons
         controller.isAppearanceLightNavigationBars = !state.prefs.appearance.lightNavigationIcons
         if (state.prefs.behavior.showStatusBar) controller.show(WindowInsetsCompat.Type.statusBars())
         else controller.hide(WindowInsetsCompat.Type.statusBars())
         controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-
-        // Tablet-only rotation restriction: Phone locked to portrait; tablets allowed to rotate
-        val isTablet = context.resources.configuration.smallestScreenWidthDp >= 600
+    }
+    // Tablet-only rotation restriction: Phone locked to portrait; tablets allowed to rotate
+    val isTablet = LocalConfiguration.current.smallestScreenWidthDp >= 600
+    LaunchedEffect(activity, state.prefs.behavior.lockRotation, isTablet) {
         val requested = if (state.prefs.behavior.lockRotation && !isTablet) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         if (activity.requestedOrientation != requested) activity.requestedOrientation = requested
-
-        val offsets = when (state.prefs.behavior.wallpaperScroll) {
-            "Off" -> .5f to .5f
-            "Horizontal" -> (.5f + manager.current.x * .5f) to .5f
-            else -> (.5f + manager.current.x * .5f) to (.5f + manager.current.y * .5f)
+    }
+    val wallpaperOffsets = when (state.prefs.behavior.wallpaperScroll) {
+        "Off" -> .5f to .5f
+        "Horizontal" -> (.5f + manager.current.x * .5f) to .5f
+        else -> (.5f + manager.current.x * .5f) to (.5f + manager.current.y * .5f)
+    }
+    DisposableEffect(view, wallpaperOffsets, permissionSignal) {
+        fun updateOffsets() {
+            runCatching {
+                view.windowToken?.let { token ->
+                    WallpaperManager.getInstance(context).setWallpaperOffsets(token, wallpaperOffsets.first, wallpaperOffsets.second)
+                }
+            }
         }
-        runCatching { if (view.windowToken != null) WallpaperManager.getInstance(context).setWallpaperOffsets(view.windowToken, offsets.first, offsets.second) }
+        val listener = object : android.view.View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: android.view.View) = updateOffsets()
+            override fun onViewDetachedFromWindow(view: android.view.View) = Unit
+        }
+        view.addOnAttachStateChangeListener(listener)
+        updateOffsets()
+        onDispose { view.removeOnAttachStateChangeListener(listener) }
     }
 
     BackHandler(enabled = panel.isNotEmpty() || manager.current != Screen.HOME || folder != null) {
@@ -334,7 +371,7 @@ fun LauncherApp(
     BackHandler(enabled = drag.active != null) { drag.cancel() }
     val nestedScroll = remember { object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-            if (available.getDistance() > 1f) lastScroll = android.os.SystemClock.uptimeMillis()
+            if (available.getDistance() > 1f) scrollEvents.tryEmit(Unit)
             return Offset.Zero
         }
     } }

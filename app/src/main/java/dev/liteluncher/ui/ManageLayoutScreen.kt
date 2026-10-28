@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -60,7 +61,8 @@ fun ManageLayoutScreen(
     }
     if (picker && area != null) LayoutAppPicker(state, apps, area, { picker = false }) { keys ->
         update { current ->
-            val additions = keys.filter { it !in current.layoutApps(area) }
+            val pinned = current.layoutApps(area).toHashSet()
+            val additions = keys.filter { it !in pinned }
             if (current.layoutLocked(area) || additions.size > current.layoutSpace(area)) current
             else additions.fold(current) { next, key -> applyAppDrop(next, key, null, AppDropTarget.Area(area)).state }
         }
@@ -84,6 +86,7 @@ private fun LayoutAreaEditor(
     val locked = state.layoutLocked(area)
     val keys = state.layoutApps(area)
     val byKey = remember(apps) { apps.associateBy { it.key } }
+    val foldersById = remember(state.folders) { state.folders.associateBy { it.id } }
     val folderIds = when (area) { LayoutArea.HOME -> state.homeFolders; LayoutArea.DOCK -> state.dockFolders; else -> emptyList() }
     LazyColumn(modifier.fillMaxSize().appDropTarget(AppDropTarget.Area(area)), contentPadding = PaddingValues(12.dp)) {
         item {
@@ -100,9 +103,8 @@ private fun LayoutAreaEditor(
             if (area == LayoutArea.FAVORITES) Text("Pinned apps appear before usage-based favorites.", fontSize = 12.sp, color = Muted)
         }
         if (keys.isEmpty()) item { Text("No pinned apps here. Choose Add apps to get started.", fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp)) }
-        items(keys, key = { "app:$it" }) { key ->
+        itemsIndexed(keys, key = { _, key -> "app:$key" }) { index, key ->
             val app = byKey[key]
-            val index = keys.indexOf(key)
             val gestures = if (app != null) Modifier.appIconGestures(app, area, !locked, null, null) else Modifier
             LayoutEntryRow(state.overrides[key]?.label?.takeIf { it.isNotBlank() } ?: app?.label ?: "Unavailable app", !locked,
                 index > 0, index < keys.lastIndex,
@@ -111,9 +113,8 @@ private fun LayoutAreaEditor(
                 leading = { if (app != null) AppIcon(app, repository, state, 32) else Icon(Icons.Rounded.Apps, null) })
         }
         if (folderIds.isNotEmpty()) item { SectionLabel("Folders") }
-        items(folderIds, key = { "folder:$it" }) { id ->
-            state.folders.find { it.id == id }?.let { folder ->
-                val index = folderIds.indexOf(id)
+        itemsIndexed(folderIds, key = { _, id -> "folder:$id" }) { index, id ->
+            foldersById[id]?.let { folder ->
                 LayoutEntryRow(folder.name, !locked, index > 0, index < folderIds.lastIndex,
                     { update { moveLayoutFolder(it, area, id, -1) } }, { update { moveLayoutFolder(it, area, id, 1) } },
                     { update { toggleLayoutFolder(it, area, id) } }, Modifier.appDropTarget(AppDropTarget.Folder(id), 3),
@@ -146,8 +147,7 @@ private fun LayoutEntryRow(
 private fun androidx.compose.foundation.lazy.LazyListScope.layoutShortcuts(state: LauncherState, update: ((LauncherState) -> LauncherState) -> Unit) {
     if (state.shortcuts.isEmpty()) return
     item { SectionLabel("Shortcuts") }
-    items(state.shortcuts, key = { "shortcut:${it.packageName}:${it.id}:${it.userSerial}" }) { shortcut ->
-        val index = state.shortcuts.indexOf(shortcut)
+    itemsIndexed(state.shortcuts, key = { _, shortcut -> "shortcut:${shortcut.packageName}:${shortcut.id}:${shortcut.userSerial}" }) { index, shortcut ->
         fun move(step: Int) = update { current ->
             if (current.prefs.home.preventChanges) current else {
                 val from = current.shortcuts.indexOf(shortcut)
@@ -207,14 +207,22 @@ private fun FolderPlacement(state: LauncherState, id: String, area: LayoutArea, 
 private fun LayoutAppPicker(state: LauncherState, apps: List<AppEntry>, area: LayoutArea, onDismiss: () -> Unit, onAdd: (List<String>) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var selected by remember { mutableStateOf(emptySet<String>()) }
-    val available = apps.filter { it.key !in state.layoutApps(area) && it.key !in state.hiddenApps }
+    val pinned = state.layoutApps(area)
+    val pinnedKeys = remember(pinned) { pinned.toHashSet() }
+    val available = remember(apps, pinnedKeys, state.hiddenApps) {
+        apps.filter { it.key !in pinnedKeys && it.key !in state.hiddenApps }
+    }
+    val availableKeys = remember(available) { available.mapTo(hashSetOf()) { it.key } }
+    val matching = remember(available, state.overrides, query) {
+        available.filter { (state.overrides[it.key]?.label?.takeIf(String::isNotBlank) ?: it.label).contains(query, true) }
+    }
     val capacity = state.layoutSpace(area)
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Add to ${area.title}") }, text = {
         Column {
             OutlinedTextField(query, { query = it.take(80) }, singleLine = true, label = { Text("Find apps") })
             Text("${selected.size} selected · $capacity slots available", fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
             LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                items(available.filter { (state.overrides[it.key]?.label?.takeIf(String::isNotBlank) ?: it.label).contains(query, true) }, key = { it.key }) { app ->
+                items(matching, key = { it.key }) { app ->
                     val checked = app.key in selected
                     val enabled = checked || selected.size < capacity
                     val toggle = { selected = if (checked) selected - app.key else selected + app.key }
@@ -225,7 +233,7 @@ private fun LayoutAppPicker(state: LauncherState, apps: List<AppEntry>, area: La
                 }
             }
         }
-    }, confirmButton = { TextButton(onClick = { onAdd(selected.filter { key -> available.any { it.key == key } }) },
+    }, confirmButton = { TextButton(onClick = { onAdd(selected.filter { it in availableKeys }) },
         enabled = selected.isNotEmpty() && selected.size <= capacity && !state.layoutLocked(area)) { Text("Add apps") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
@@ -249,20 +257,24 @@ private fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (Fold
     var name by remember(folder.id) { mutableStateOf(folder.name) }
     var selected by remember(folder.id) { mutableStateOf(folder.apps) }
     var filter by rememberSaveable(folder.id) { mutableStateOf("") }
+    val appKeys = remember(apps) { apps.mapTo(hashSetOf()) { it.key } }
+    val selectedKeys = remember(selected) { selected.toHashSet() }
+    val unavailable = remember(selected, appKeys) { selected.filter { it !in appKeys } }
+    val matching = remember(apps, filter) { apps.filter { it.label.contains(filter, true) } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit folder") }, text = {
         Column {
             OutlinedTextField(name, { name = it.take(128) }, label = { Text("Folder name") }, singleLine = true)
             OutlinedTextField(filter, { filter = it.take(80) }, label = { Text("Filter applications") }, singleLine = true, modifier = Modifier.padding(top = 10.dp))
             Text("${selected.size} selected", fontSize = 12.sp, color = Muted, modifier = Modifier.padding(vertical = 10.dp))
             LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                items(selected.filter { key -> apps.none { it.key == key } }, key = { "unavailable:$it" }) { key ->
+                items(unavailable, key = { "unavailable:$it" }) { key ->
                     Row(Modifier.fillMaxWidth().clickable { selected = selected - key }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(true, { selected = selected - key })
                         Text("Unavailable app", fontSize = 13.sp)
                     }
                 }
-                items(apps.filter { it.label.contains(filter, true) }, key = { it.key }) { app ->
-                    val checked = app.key in selected
+                items(matching, key = { it.key }) { app ->
+                    val checked = app.key in selectedKeys
                     val enabled = checked || selected.size < MAX_LAYOUT_APPS
                     val toggle = { selected = if (checked) selected - app.key else selected + app.key }
                     Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = toggle), verticalAlignment = Alignment.CenterVertically) {

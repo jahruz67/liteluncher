@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
 import kotlinx.coroutines.Dispatchers
@@ -58,7 +59,8 @@ fun AppContextMenu(
     onRemove: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val shortcuts by produceState<List<NativeShortcut>>(emptyList(), app.key) {
+    val shortcutRevision by repository.shortcutRevision.collectAsStateWithLifecycle()
+    val shortcuts by produceState<List<NativeShortcut>>(emptyList(), app.key, shortcutRevision) {
         value = withContext(Dispatchers.IO) { repository.shortcuts(app) }
     }
     fun update(block: (LauncherState) -> LauncherState) { actions.update(block); onDismiss() }
@@ -189,10 +191,15 @@ fun AppContextMenu(
                                 IconButton(
                                     onClick = {
                                         val serial = requireNotNull(context.getSystemService(UserManager::class.java)).getSerialNumberForUser(shortcut.user)
-                                        update { current ->
-                                            current.copy(shortcuts = (current.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial)).distinctBy { Triple(it.packageName, it.id, it.userSerial) })
+                                        if (state.layoutSpace(LayoutArea.HOME) <= 0) {
+                                            android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
+                                            onDismiss()
+                                        } else update { current ->
+                                            if (current.prefs.home.preventChanges || current.layoutSpace(LayoutArea.HOME) <= 0) current
+                                            else current.copy(shortcuts = (current.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial)).distinctBy { Triple(it.packageName, it.id, it.userSerial) })
                                         }
                                     },
+                                    enabled = !state.prefs.home.preventChanges,
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(Icons.Rounded.Add, "Pin shortcut", modifier = Modifier.size(16.dp), tint = Color.Gray)
@@ -343,7 +350,10 @@ fun FolderOverlay(
     actions: WorkspaceActions,
     onDismiss: () -> Unit
 ) {
-    val members = folder.apps.mapNotNull { key -> apps.find { it.key == key } }
+    val members = remember(folder.apps, apps) {
+        val byKey = apps.associateBy { it.key }
+        folder.apps.mapNotNull(byKey::get)
+    }
     val stack = fromDock && state.prefs.dock.folderStack
     val folderColor = parseColor(state.prefs.folders.color)
     val background = folderColor.copy(alpha = folderColor.alpha * state.prefs.folders.opacity)

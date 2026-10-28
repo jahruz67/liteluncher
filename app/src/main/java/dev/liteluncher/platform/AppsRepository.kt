@@ -11,6 +11,7 @@ import android.content.IntentFilter
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
+import android.content.res.Configuration
 import android.graphics.drawable.Drawable
 import android.graphics.Bitmap
 import android.util.LruCache
@@ -28,12 +29,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.xmlpull.v1.XmlPullParser
 import java.text.Collator
+import java.util.concurrent.FutureTask
 
 data class AppEntry(
     val key: String,
@@ -63,13 +66,20 @@ class AppsRepository(context: Context) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutableApps = MutableStateFlow<List<AppEntry>>(emptyList())
     val apps: StateFlow<List<AppEntry>> = mutableApps.asStateFlow()
+    private val mutableIconRevision = MutableStateFlow(0L)
+    val iconRevision: StateFlow<Long> = mutableIconRevision.asStateFlow()
+    private val mutableShortcutRevision = MutableStateFlow(0L)
+    val shortcutRevision: StateFlow<Long> = mutableShortcutRevision.asStateFlow()
     val badges: StateFlow<Map<String, Int>> = LauncherNotificationService.counts
     private val refreshLock = Any()
+    private val refreshRequests = Channel<Long>(Channel.CONFLATED)
     private var refreshGeneration = 0L
+    private var iconGeneration = 0L
+    private var iconConfiguration = Configuration(this.context.resources.configuration)
     @Volatile private var closed = false
     private var callbackRegistered = false
     private var receiverRegistered = false
-    private val iconMappings = mutableMapOf<String, Map<String, String>>()
+    private val iconMappings = mutableMapOf<String, FutureTask<Map<String, String>>>()
     private val iconBitmaps = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
@@ -82,14 +92,21 @@ class AppsRepository(context: Context) : AutoCloseable {
         override fun onPackagesUnavailable(packages: Array<out String>, user: UserHandle, replacing: Boolean) = invalidate()
         override fun onPackagesSuspended(packages: Array<out String>, user: UserHandle) = invalidate()
         override fun onPackagesUnsuspended(packages: Array<out String>, user: UserHandle) = invalidate()
-        override fun onShortcutsChanged(packageName: String, shortcuts: MutableList<ShortcutInfo>, user: UserHandle) = refresh()
+        override fun onShortcutsChanged(packageName: String, shortcuts: MutableList<ShortcutInfo>, user: UserHandle) {
+            synchronized(refreshLock) {
+                if (!closed) mutableShortcutRevision.value++
+            }
+        }
     }
 
     private val profileReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) = refresh()
+        override fun onReceive(context: Context?, intent: Intent?) = invalidate()
     }
 
     init {
+        scope.launch {
+            for (generation in refreshRequests) loadApps(generation)
+        }
         callbackRegistered = runCatching {
             launcher.registerCallback(callback, Handler(Looper.getMainLooper()))
             true
@@ -108,41 +125,80 @@ class AppsRepository(context: Context) : AutoCloseable {
     }
 
     private fun invalidate() {
-        synchronized(iconMappings) { iconMappings.clear() }
-        refresh()
+        synchronized(refreshLock) {
+            if (closed) return
+            invalidateIconsLocked()
+            mutableShortcutRevision.value++
+            refreshRequests.trySend(++refreshGeneration).getOrThrow()
+        }
     }
 
     fun refresh() {
-        val generation = synchronized(refreshLock) {
+        synchronized(refreshLock) {
             if (closed) return
-            iconBitmaps.evictAll()
-            ++refreshGeneration
-        }
-        scope.launch {
-            val entries = accessibleProfiles().flatMap { user ->
-                val serial = runCatching { users.getSerialNumberForUser(user) }.getOrDefault(-1L)
-                if (serial < 0) emptyList() else runCatching {
-                    launcher.getActivityList(null, user).mapNotNull { info ->
-                        if (info.componentName.packageName == context.packageName) null else AppEntry(
-                            key(info.componentName, serial), info.componentName.packageName,
-                            info.label?.toString().orEmpty().ifBlank { info.componentName.packageName },
-                            info.componentName, user
-                        )
-                    }
-                }.getOrDefault(emptyList())
+            if (!callbackRegistered || !receiverRegistered || iconConfiguration != context.resources.configuration) {
+                invalidateIconsLocked()
             }
-            val collator = Collator.getInstance()
-            val sorted = entries.distinctBy { it.key }.sortedWith { a, b ->
-                collator.compare(a.label, b.label).takeIf { it != 0 } ?: a.key.compareTo(b.key)
-            }
-            synchronized(refreshLock) {
-                if (!closed && generation == refreshGeneration) mutableApps.value = sorted
-            }
+            refreshRequests.trySend(++refreshGeneration).getOrThrow()
         }
     }
 
+    private fun invalidateIconsLocked() {
+        synchronized(iconMappings) { iconMappings.clear() }
+        iconConfiguration = Configuration(context.resources.configuration)
+        iconBitmaps.evictAll()
+        mutableIconRevision.value = ++iconGeneration
+    }
+
+    private fun loadApps(generation: Long) {
+        val entries = accessibleProfiles().flatMap { user ->
+            val serial = runCatching { users.getSerialNumberForUser(user) }.getOrDefault(-1L)
+            if (serial < 0) emptyList() else runCatching {
+                launcher.getActivityList(null, user).mapNotNull { info ->
+                    if (info.componentName.packageName == context.packageName) null else AppEntry(
+                        key(info.componentName, serial), info.componentName.packageName,
+                        info.label?.toString().orEmpty().ifBlank { info.componentName.packageName },
+                        info.componentName, user
+                    )
+                }
+            }.getOrDefault(emptyList())
+        }
+        val collator = Collator.getInstance()
+        val sorted = entries.distinctBy { it.key }.sortedWith { a, b ->
+            collator.compare(a.label, b.label).takeIf { it != 0 } ?: a.key.compareTo(b.key)
+        }
+        synchronized(refreshLock) {
+            if (!closed && generation == refreshGeneration) mutableApps.value = sorted
+        }
+    }
+
+    /** Search all represented apps with one shortcut query per user profile. */
+    fun shortcuts(apps: List<AppEntry>, limit: Int = 300): List<NativeShortcut> {
+        if (limit <= 0 || !runCatching { launcher.hasShortcutHostPermission() }.getOrDefault(false)) return emptyList()
+        val representatives = apps.distinctBy { it.packageName to it.user }
+        val activities = representatives.associateBy { it.component to it.user }
+        val matches = representatives.map { it.user }.distinct().filter(::profileAvailable).flatMap { user ->
+            runCatching {
+                launcher.getShortcuts(LauncherApps.ShortcutQuery().apply {
+                    setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                        LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+                }, user).orEmpty().filter { shortcut ->
+                    shortcut.isEnabled && shortcut.activity?.let { (it to user) in activities } == true
+                }
+            }.getOrDefault(emptyList())
+        }.groupBy { it.`package` to it.userHandle }
+        return representatives.asSequence().flatMap { app ->
+            matches[app.packageName to app.user].orEmpty().sortedBy { it.rank }.asSequence().map {
+                NativeShortcut(it.id, it.`package`,
+                    it.shortLabel?.toString() ?: it.longLabel?.toString() ?: it.id, it.userHandle)
+            }
+        }.distinctBy { Triple(it.packageName, it.id, it.user) }.take(limit).toList()
+    }
+
     private fun accessibleProfiles(): List<UserHandle> = runCatching {
-        users.userProfiles.filter(::profileAvailable)
+        users.userProfiles.filter { user ->
+            runCatching { users.isUserUnlocked(user) && !users.isQuietModeEnabled(user) }.getOrDefault(false)
+        }
     }.getOrDefault(emptyList())
 
     private fun profileAvailable(user: UserHandle): Boolean = runCatching {
@@ -209,7 +265,8 @@ class AppsRepository(context: Context) : AutoCloseable {
     }
 
     /** Requires the caller to request READ_CONTACTS; queries stay in the current profile. */
-    fun contacts(query: String = ""): List<ContactEntry> {
+    fun contacts(query: String = "", limit: Int = Int.MAX_VALUE): List<ContactEntry> {
+        if (limit <= 0) return emptyList()
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             return emptyList()
         }
@@ -220,7 +277,7 @@ class AppsRepository(context: Context) : AutoCloseable {
             context.contentResolver.query(uri, arrayOf(ContactsContract.Contacts._ID,
                 ContactsContract.Contacts.DISPLAY_NAME_PRIMARY, ContactsContract.Contacts.LOOKUP_KEY),
                 null, null, "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE LOCALIZED ASC")?.use { cursor ->
-                while (cursor.moveToNext()) {
+                while (result.size < limit && cursor.moveToNext()) {
                     val id = cursor.getLong(0)
                     val name = cursor.getString(1).orEmpty().ifBlank { "Unnamed contact" }
                     val lookup = cursor.getString(2) ?: continue
@@ -250,10 +307,10 @@ class AppsRepository(context: Context) : AutoCloseable {
 
     fun iconBitmap(app: AppEntry, iconPack: String): Bitmap? {
         cachedIconBitmap(app, iconPack)?.let { return it }
-        val generation = synchronized(refreshLock) { refreshGeneration }
+        val generation = synchronized(refreshLock) { iconGeneration }
         val bitmap = runCatching { icon(app, iconPack)?.toBitmap(168, 168) }.getOrNull() ?: return null
         synchronized(refreshLock) {
-            if (!closed && generation == refreshGeneration) iconBitmaps.put("$iconPack|${app.key}", bitmap)
+            if (!closed && generation == iconGeneration) iconBitmaps.put("$iconPack|${app.key}", bitmap)
         }
         return bitmap
     }
@@ -263,9 +320,11 @@ class AppsRepository(context: Context) : AutoCloseable {
         if (iconPack.isNotBlank()) {
             val themed = runCatching {
                 val resources = packages.getResourcesForApplication(iconPack)
-                val mapping = synchronized(iconMappings) {
-                    iconMappings.getOrPut(iconPack) { readIconMappings(iconPack) }
+                val mappingTask = synchronized(iconMappings) {
+                    iconMappings.getOrPut(iconPack) { FutureTask { readIconMappings(iconPack) } }
                 }
+                mappingTask.run()
+                val mapping = mappingTask.get()
                 val name = mapping[app.component.flattenToString()]
                     ?: mapping[app.component.flattenToShortString()]
                 val id = name?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
@@ -317,6 +376,7 @@ class AppsRepository(context: Context) : AutoCloseable {
 
     override fun close() {
         synchronized(refreshLock) { closed = true; ++refreshGeneration }
+        refreshRequests.close()
         if (callbackRegistered) runCatching { launcher.unregisterCallback(callback) }
         if (receiverRegistered) runCatching { context.unregisterReceiver(profileReceiver) }
         synchronized(iconMappings) { iconMappings.clear() }

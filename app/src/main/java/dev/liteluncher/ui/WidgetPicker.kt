@@ -45,6 +45,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+private data class WidgetChoice(val provider: AppWidgetProviderInfo, val label: String)
+private data class WidgetGroup(val packageName: String, val label: String, val widgets: List<WidgetChoice>)
+
 /** Kept in the workspace's root so a held preview can continue onto the visible desktop. */
 @Composable
 fun WidgetPicker(
@@ -52,20 +55,24 @@ fun WidgetPicker(
     onSelect: (AppWidgetProviderInfo, WidgetItem?) -> Unit, onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val providers by produceState<List<AppWidgetProviderInfo>?>(null, controller) {
-        value = withContext(Dispatchers.IO) { controller.providers() }
+    val providers by produceState<List<WidgetGroup>?>(null, controller, context) {
+        value = withContext(Dispatchers.IO) {
+            controller.providers().groupBy { it.provider.packageName }.map { (key, widgets) ->
+                val label = runCatching {
+                    context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(key, 0)).toString()
+                }.getOrDefault(key)
+                WidgetGroup(key, label, widgets.map { provider ->
+                    WidgetChoice(provider, runCatching { provider.loadLabel(context.packageManager) }.getOrDefault(label))
+                })
+            }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+        }
     }
     var query by rememberSaveable { mutableStateOf("") }
     var expanded by rememberSaveable { mutableStateOf<String?>(null) }
     val groups = remember(providers, query) {
-        providers.orEmpty().groupBy { it.provider.packageName }.map { (key, widgets) ->
-            val label = runCatching {
-                context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(key, 0)).toString()
-            }.getOrDefault(key)
-            Triple(key, label, widgets)
-        }.filter { (_, label, widgets) -> label.contains(query, true) || widgets.any {
-            runCatching { it.loadLabel(context.packageManager) }.getOrDefault("").contains(query, true)
-        } }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.second })
+        providers.orEmpty().filter { (_, label, widgets) ->
+            label.contains(query, true) || widgets.any { it.label.contains(query, true) }
+        }
     }
     var dragging by remember { mutableStateOf<AppWidgetProviderInfo?>(null) }
     var pointer by remember { mutableStateOf(Offset.Zero) }
@@ -105,21 +112,22 @@ fun WidgetPicker(
                 CircularProgressIndicator()
             } else if (groups.isEmpty()) Text("No widgets found", color = Color.White, modifier = Modifier.padding(20.dp))
             else LazyColumn(Modifier.weight(1f)) {
-                items(groups, key = { it.first }) { (key, label, widgets) ->
+                groups.forEach { (key, label, widgets) ->
                     val open = expanded == key || query.isNotBlank()
-                    Column {
+                    item(key = "group:$key", contentType = "header") {
                         Row(Modifier.fillMaxWidth().clickable { expanded = if (open) null else key }.padding(vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically) {
-                            WidgetPreview(widgets.first(), true, Modifier.size(36.dp))
+                            WidgetPreview(widgets.first().provider, true, Modifier.size(36.dp))
                             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text(label, color = Color.White, fontSize = 15.sp)
                                 Text("${widgets.size} widget${if (widgets.size == 1) "" else "s"}", color = Color.LightGray, fontSize = 12.sp)
                             }
                             Icon(if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = Color.LightGray)
                         }
-                        if (open) widgets.forEach { provider ->
+                    }
+                    if (open) {
+                        items(widgets, key = { "widget:${it.provider.provider.flattenToString()}" }, contentType = { "widget" }) { (provider, name) ->
                             var bounds by remember(provider.provider) { mutableStateOf(Rect.Zero) }
-                            val name = runCatching { provider.loadLabel(context.packageManager) }.getOrDefault(label)
                             val span = controller.placement(AppWidgetManager.INVALID_APPWIDGET_ID, provider)
                             Surface(Modifier.fillMaxWidth().padding(start = 26.dp, bottom = 10.dp)
                                 .onGloballyPositioned { bounds = it.boundsInRoot() }

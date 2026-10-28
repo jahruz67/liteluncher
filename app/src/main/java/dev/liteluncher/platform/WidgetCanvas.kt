@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -63,6 +64,8 @@ fun WidgetCanvas(
     val currentItems by rememberUpdatedState(arranged)
     val currentChange by rememberUpdatedState(onChange)
     val refreshes by controller.refreshes.collectAsState()
+    val providerChanges by controller.providerChanges.collectAsState()
+    val configuration = LocalConfiguration.current
     var contextMenuWidget by rememberSaveable { mutableStateOf<Int?>(null) }
     var resizingWidgetId by rememberSaveable { mutableStateOf<Int?>(null) }
     var draft by remember { mutableStateOf<WidgetItem?>(null) }
@@ -104,7 +107,7 @@ fun WidgetCanvas(
             val cellWidth = canvasWidth / columns
             val cellHeight = canvasHeight / rows
             val gutter = 2.dp
-            SideEffect { controller.syncLayout(prefs, arranged, canvasWidth.value, canvasHeight.value) }
+            SideEffect { controller.syncGeometry(prefs, canvasWidth.value, canvasHeight.value) }
 
             // Behind the widgets, so dismissing the selection cannot swallow the handles.
             if (resizingWidgetId != null) {
@@ -114,10 +117,6 @@ fun WidgetCanvas(
                 key(saved.id, refreshes[saved.id] ?: 0) {
                     val item = draft?.takeIf { it.id == saved.id } ?: saved
                     val isResizing = resizingWidgetId == item.id
-                    val provider = controller.provider(item.id)
-                    val resizeMode = provider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_NONE
-                    val minSpan = provider?.let(controller::minimumSpan) ?: (1 to 1)
-                    val maxSpan = provider?.let(controller::maximumSpan) ?: (columns to rows)
                     val itemWidth = (cellWidth * item.columns - gutter * 2).coerceAtLeast(1.dp)
                     val itemHeight = (cellHeight * item.rows - gutter * 2).coerceAtLeast(1.dp)
                     val onEdit = { contextMenuWidget = saved.id }
@@ -137,11 +136,20 @@ fun WidgetCanvas(
                                 itemHeight.value.roundToInt().coerceAtLeast(1), radius.value, onEdit) }
                         )
                         WidgetContextMenu(contextMenuWidget == item.id,
-                            !prefs.preventChanges && resizeMode != AppWidgetProviderInfo.RESIZE_NONE, !prefs.preventChanges,
+                            !prefs.preventChanges, !prefs.preventChanges,
                             { resizingWidgetId = item.id; contextMenuWidget = null },
                             { controller.refresh(item.id); contextMenuWidget = null }, { remove(item) }, { contextMenuWidget = null })
 
                         if (isResizing) {
+                            val provider = remember(controller, item.id, providerChanges, configuration) { controller.provider(item.id) }
+                            val resizeMode = provider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_NONE
+                            val minSpan = remember(controller, provider, cellWidth, cellHeight) {
+                                provider?.let { controller.minimumSpan(it, cellWidth.value, cellHeight.value) } ?: (1 to 1)
+                            }
+                            val maxSpan = remember(controller, provider, columns, rows, cellWidth, cellHeight) {
+                                provider?.let { controller.maximumSpan(it, cellWidth.value, cellHeight.value, columns, rows) }
+                                    ?: (columns to rows)
+                            }
                             // Capture the drag on top of the native widget; ordinary widget touches stay native outside edit mode.
                             Box(Modifier.fillMaxSize().widgetGridDrag(item, cellWidth.value, cellHeight.value,
                                 onPreview = { origin, delta ->
@@ -233,11 +241,11 @@ private fun Modifier.widgetGridDrag(
 
 @Composable
 private fun WidgetContextMenu(
-    expanded: Boolean, canResize: Boolean, canRemove: Boolean,
+    expanded: Boolean, canEdit: Boolean, canRemove: Boolean,
     onResize: () -> Unit, onRefresh: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit
 ) {
     DropdownMenu(expanded, onDismiss, containerColor = Color(0xFF253238)) {
-        DropdownMenuItem(text = { Text("Resize", color = Color.White) }, onClick = onResize, enabled = canResize,
+        DropdownMenuItem(text = { Text("Move / resize", color = Color.White) }, onClick = onResize, enabled = canEdit,
             leadingIcon = { Icon(Icons.Rounded.AspectRatio, null, tint = Color.White) })
         DropdownMenuItem(text = { Text("Refresh", color = Color.White) }, onClick = onRefresh,
             leadingIcon = { Icon(Icons.Rounded.Refresh, null, tint = Color.White) })
