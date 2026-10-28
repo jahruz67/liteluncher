@@ -1,15 +1,10 @@
 package dev.liteluncher.ui
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import dev.liteluncher.data.LauncherState
+import dev.liteluncher.settings.ScreenManagerScreen
 
 @Composable
-fun ManageLayoutScreen(onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
-    Box(Modifier.fillMaxSize().background(Color.Gray))
+fun ManageLayoutScreen(state: LauncherState, onUpdate: ((LauncherState) -> LauncherState) -> Unit, onBack: () -> Unit) {
+    ScreenManagerScreen(state, onUpdate, onBack)
 }

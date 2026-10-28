@@ -32,12 +32,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
@@ -369,12 +366,12 @@ fun LauncherApp(
                 else -> baseScheme.surface
             })
 
-        val shouldScrim = manager.current == Screen.SEARCH || panel == "screens"
+        val shouldScrim = manager.current == Screen.SEARCH || panel == "screens" || panel == "layout"
 
         MaterialTheme(colorScheme = workspaceScheme) {
         CompositionLocalProvider(LocalContentColor provides foreground, LocalAppDrag provides drag) {
             Box(Modifier.fillMaxSize()) {
-                if (launcherSurface != SurfaceTheme.GLASS) Box(Modifier.fillMaxSize().background(surfaceColor(launcherSurface, MaterialTheme.colorScheme.primary)))
+                if (launcherSurface != SurfaceTheme.GLASS && panel != "screens" && panel != "layout") Box(Modifier.fillMaxSize().background(surfaceColor(launcherSurface, MaterialTheme.colorScheme.primary)))
                 val appearance = state.prefs.appearance
                 val dimColor = when (appearance.dimMode) {
                     "Off" -> Color.Transparent
@@ -389,17 +386,10 @@ fun LauncherApp(
 
                 if (!ready) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Cerulean) }
-                } else if (panel == "screens") {
-                    Box(Modifier.fillMaxSize().blur(8.dp).windowInsetsPadding(WindowInsets.safeDrawing).alpha(.5f)
-                        .clearAndSetSemantics {}.pointerInput(Unit) {
-                            awaitPointerEventScope {
-                                while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
-                            }
-                        }) {
-                        HomeScreen(state, apps, model.apps, badges, actions, {}, {})
-                    }
+                } else if (panel == "screens" || panel == "layout") {
                     Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                        ScreenManagerScreen(state, model.store::update, { panel = screenManagerReturn })
+                        if (panel == "layout") ManageLayoutScreen(state, model.store::update, { panel = "" })
+                        else ScreenManagerScreen(state, model.store::update, { panel = screenManagerReturn })
                     }
                 } else if (panel.isNotEmpty()) {
                     MaterialTheme(colorScheme = baseScheme) {
@@ -409,7 +399,6 @@ fun LauncherApp(
                             when (panel) {
                                 "settings" -> SettingsScreen(state, apps, iconPacks, model.store::update, { panel = "" }, { screenManagerReturn = "settings"; panel = "screens" }, onExport, onImport,
                                     onDefaultHome, { SystemActions.notificationAccess(context) }, { SystemActions.usageAccess(context) }, onContacts)
-                                "layout" -> ManageLayoutScreen { panel = "" }
                             }
                         }
                     }
