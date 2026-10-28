@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -476,8 +477,8 @@ fun LauncherApp(
                             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(12.dp))
 
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
-                            Box(Modifier.fillMaxSize()
-                            ) {
+                            // Keep every part of a page, including Home's dock, in the same swipe layer.
+                            Box(Modifier.fillMaxSize().graphicsLayer { clip = true }) {
                                 when (screen) {
                                     Screen.HOME -> HomeScreen(
                                         state = state,
@@ -546,6 +547,20 @@ fun LauncherApp(
                                                 },
                                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                                                 onCanvasBounds = { desktopBounds = it },
+                                                overlay = {
+                                                    val grid = state.prefs.desktop.grid.copy(columns = state.prefs.desktop.columns, rows = state.prefs.desktop.rows)
+                                                    PositionedWorkspace("desktop:$currentDesktopPage", state, apps, model.apps, grid, badges, actions, Modifier.fillMaxSize())
+                                                    val cellWidth = maxWidth / grid.columns
+                                                    val cellHeight = maxHeight / grid.rows
+                                                    state.pendingWidgets.filter { it.page == currentDesktopPage }.forEach { item ->
+                                                        key(item.key) {
+                                                            PendingWidgetTile(item, widgets, Modifier.offset(x = cellWidth * item.column, y = cellHeight * item.row)
+                                                                .width(cellWidth * item.columns).height(cellHeight * item.rows)) {
+                                                                model.store.update { current -> current.copy(pendingWidgets = current.pendingWidgets.filterNot { it.key == item.key }) }
+                                                            }
+                                                        }
+                                                    }
+                                                },
                                                 onWidgetDeleted = { deleted ->
                                                     finishWidgetRemoval()
                                                     widgets.deferRemoval(deleted.id)
@@ -558,7 +573,8 @@ fun LauncherApp(
                                             )
                                         }
 
-                                        if (pageWidgets.isEmpty() && state.prefs.desktop.hint) {
+                                        if (pageWidgets.isEmpty() && state.pendingWidgets.none { it.page == currentDesktopPage } &&
+                                            state.workspaceKeys("desktop:$currentDesktopPage").isEmpty() && state.prefs.desktop.hint) {
                                             ExtendedFloatingActionButton(
                                                 onClick = actions.widgets,
                                                 containerColor = MaterialTheme.colorScheme.primary,
@@ -593,6 +609,7 @@ fun LauncherApp(
                         ) { screen ->
                             if (horizontalPaging && screen == Screen.HOME) {
                                 HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(),
+                                    beyondViewportPageCount = 1,
                                     key = { horizontalScreens[it] }, userScrollEnabled = swipeWithPager && workspacePointerCount < 2 && drag.active == null) { page -> renderPage(horizontalScreens[page]) }
                             } else renderPage(screen)
                         }
@@ -610,13 +627,6 @@ fun LauncherApp(
 
                         Spacer(Modifier.height(8.dp))
                     }
-
-                    if (state.prefs.dock.enabled && manager.current == Screen.HOME) {
-                        Box(Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)) {
-                            FloatingDock(state, apps, model.apps, badges, actions)
-                        }
-                    }
-
 
                 }
 
@@ -697,7 +707,7 @@ fun LauncherApp(
 
 
 @Composable
-private fun FloatingDock(
+internal fun FloatingDock(
     state: LauncherState,
     apps: List<AppEntry>,
     repository: AppsRepository,
@@ -724,7 +734,9 @@ private fun FloatingDock(
         else RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
     BoxWithConstraints(Modifier.fillMaxHeight().width(dockWidth).windowInsetsPadding(WindowInsets.safeDrawing)
         .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)) {
-        val totalItems = entries.size + folders.size + (if (prefs.allApps) 1 else 0) + (if (gap) 1 else 0)
+        val positionedDock = state.positions.any { it.container == "dock" }
+        val dockKeys = state.workspaceKeys("dock")
+        val totalItems = (if (positionedDock) dockKeys.size else entries.size + folders.size) + (if (prefs.allApps) 1 else 0) + (if (gap) 1 else 0)
         val itemHeight = (56 * prefs.iconScale + if (prefs.labels) 36 else 16).dp
         val estimatedHeight = (totalItems.coerceAtLeast(1) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
         val height = if (prefs.fullWidth) maxHeight else estimatedHeight
@@ -743,6 +755,10 @@ private fun FloatingDock(
                     }
                 }
                 if (prefs.allApps && prefs.allAppsLeft) allAppsButton()
+                if (positionedDock) dockKeys.forEach { itemKey ->
+                    key(itemKey) { WorkspaceEntry(itemKey, "dock", state, apps, repository, grid, badges, actions,
+                        Modifier.fillMaxWidth().height(itemHeight)) }
+                } else {
                 preview.forEachIndexed { index, app ->
                     if (gap && index == to) Spacer(Modifier.height(itemHeight))
                     key(app.key) {
@@ -756,6 +772,7 @@ private fun FloatingDock(
                     FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) },
                         { actions.folderActions(item) }, Modifier.fillMaxWidth())
                 }
+                }
                 if (prefs.allApps && !prefs.allAppsLeft) allAppsButton()
                 if (totalItems == 0) IconButton(onClick = { actions.navigate(Screen.APPS) }) {
                     Icon(Icons.Rounded.Add, "Add apps to dock")
@@ -763,7 +780,7 @@ private fun FloatingDock(
             }
         }
         // Stable hit regions prevent the preview gap from moving its own drop target.
-        if (drag?.active != null && !prefs.preventChanges) {
+        if (drag?.active != null && !prefs.preventChanges && !positionedDock) {
             entries.forEachIndexed { index, app ->
                 Box(Modifier.offset(y = top + prefs.padding.dp + itemHeight * index - scrollOffset +
                     (if (prefs.allApps && prefs.allAppsLeft) (56 * prefs.iconScale + 16).dp else 0.dp))

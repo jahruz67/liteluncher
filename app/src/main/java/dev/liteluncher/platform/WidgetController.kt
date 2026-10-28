@@ -138,7 +138,10 @@ class WidgetController(
                     putParcelable("provider", it.provider)
                     putString("stage", it.stage)
                     putParcelable("pin", it.pin)
-                    it.location?.let { location -> putIntArray("location", intArrayOf(location.column, location.row, location.page)) }
+                    it.location?.let { location ->
+                        putIntArray("location", intArrayOf(location.column, location.row, location.page, location.columns, location.rows))
+                        putString("restoreKey", location.restoreKey)
+                    }
                 }
             }
         }
@@ -304,12 +307,17 @@ class WidgetController(
         }
         if (occupied.overflow.isNotEmpty()) return null
         val maximum = maximumSpan(info)
+        if (!location?.restoreKey.isNullOrEmpty()) {
+            if (location!!.columns !in minimum.first..maximum.first || location.rows !in minimum.second..maximum.second) return null
+            val exact = location.copy(id = id, provider = info.provider.flattenToString())
+            return exact.takeIf { WidgetGrid.fits(it, occupied.placed, columns, rows) }
+        }
         val maxColumns = desiredColumns.coerceIn(minimum.first, maximum.first)
         val maxRows = desiredRows.coerceIn(minimum.second, maximum.second)
         for (rowSpan in maxRows downTo minimum.second) {
             for (columnSpan in maxColumns downTo minimum.first) {
                 val candidate = WidgetGrid.place(WidgetItem(id, column = location?.column ?: 0, row = location?.row ?: 0,
-                    columns = columnSpan, rows = rowSpan, page = page),
+                    columns = columnSpan, rows = rowSpan, page = page, provider = info.provider.flattenToString()),
                     occupied.placed, columns, rows)
                 if (candidate != null) return candidate
             }
@@ -560,8 +568,9 @@ class WidgetController(
         val stage = bundle?.getString("stage")
         if (id > 0 && info != null && stage in listOf(BINDING, CONFIGURING)) {
             val pin = BundleCompat.getParcelable(requireNotNull(bundle), "pin", LauncherApps.PinItemRequest::class.java)
-            val location = bundle.getIntArray("location")?.takeIf { it.size == 3 }?.let {
-                WidgetItem(id, column = it[0], row = it[1], page = it[2])
+            val location = bundle.getIntArray("location")?.takeIf { it.size == 3 || it.size == 5 }?.let {
+                WidgetItem(id, column = it[0], row = it[1], page = it[2], columns = it.getOrElse(3) { 4 }, rows = it.getOrElse(4) { 2 },
+                    provider = info.provider.flattenToString(), restoreKey = bundle.getString("restoreKey").orEmpty())
             }
             pending = Pending(id, info, requireNotNull(stage), pin, location)
         }

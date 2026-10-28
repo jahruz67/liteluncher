@@ -35,6 +35,7 @@ private val Context.launcherPreferences by preferencesDataStore(
 
 /** Own at application scope. Every accepted command runs in order, including backup barriers. */
 class LauncherStore(context: Context) {
+    private val applicationContext = context.applicationContext
     private val dataStore = context.applicationContext.launcherPreferences
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val commands = Channel<Command>(Channel.UNLIMITED)
@@ -83,7 +84,16 @@ class LauncherStore(context: Context) {
                                 val current = decodeStored(dataStore.data.first()[SNAPSHOT])
                                 mutableState.value = current
                                 mutableReady.value = true
-                                command.result.complete(encode(current.copy(widgets = emptyList())))
+                                val portableWidgets = current.widgets.mapNotNull { item ->
+                                    val provider = item.provider.ifBlank {
+                                        runCatching { android.appwidget.AppWidgetManager.getInstance(applicationContext)
+                                            .getAppWidgetInfo(item.id)?.provider?.flattenToString() }.getOrNull().orEmpty()
+                                    }
+                                    if (provider.isBlank()) null else PortableWidget("widget:${item.id}", provider,
+                                        item.column, item.row, item.columns, item.rows, item.page)
+                                }
+                                command.result.complete(encode(current.copy(widgets = emptyList(),
+                                    pendingWidgets = (current.pendingWidgets + portableWidgets).distinctBy { it.key })))
                             } catch (cancelled: CancellationException) {
                                 command.result.completeExceptionally(cancelled)
                                 throw cancelled
@@ -98,7 +108,12 @@ class LauncherStore(context: Context) {
                                 commit { local ->
                                     val pageCount = maxOf(imported.prefs.desktop.pageCount,
                                         (local.widgets.maxOfOrNull { it.page } ?: -1) + 1)
-                                    imported.copy(widgets = local.widgets, prefs = imported.prefs.copy(
+                                    val pendingWidgets = imported.pendingWidgets.filterNot { pending ->
+                                        local.widgets.any { widget -> widget.provider == pending.provider && widget.page == pending.page &&
+                                            widget.column == pending.column && widget.row == pending.row &&
+                                            widget.columns == pending.columns && widget.rows == pending.rows }
+                                    }
+                                    imported.copy(widgets = local.widgets, pendingWidgets = pendingWidgets, prefs = imported.prefs.copy(
                                         desktop = imported.prefs.desktop.copy(pageCount = pageCount)
                                     ))
                                 }
@@ -315,13 +330,14 @@ class LauncherStore(context: Context) {
             val prefs = sanitizePrefs(value.prefs)
             val folders = value.folders.asSequence().mapNotNull { folder ->
                 val id = key(folder.id) ?: return@mapNotNull null
-                folder.copy(id = id, name = text(folder.name, 128).ifEmpty { "Folder" }, apps = keys(folder.apps, MAX_APPS), iconUri = safeUri(folder.iconUri))
+                folder.copy(id = id, name = text(folder.name, 128), apps = keys(folder.apps, MAX_APPS), iconUri = safeUri(folder.iconUri),
+                    entryOrder = folder.entryOrder.mapNotNull { key(it, 2_048) }.distinct().take(MAX_APPS), backupIcon = backupIcon(folder.backupIcon))
             }.distinctBy { it.id }.take(MAX_FOLDERS).toList()
             val folderIds = folders.map { it.id }.toSet()
             val overrides = linkedMapOf<String, AppOverride>()
             for ((rawKey, override) in value.overrides) {
                 val id = key(rawKey) ?: continue
-                overrides[id] = override.copy(label = text(override.label, 128), iconUri = safeUri(override.iconUri))
+                overrides[id] = override.copy(label = text(override.label, 128), iconUri = safeUri(override.iconUri), backupIcon = backupIcon(override.backupIcon))
                 if (overrides.size >= MAX_APPS) break
             }
             val launches = linkedMapOf<String, Int>()
@@ -336,14 +352,16 @@ class LauncherStore(context: Context) {
                     val row = widget.row.coerceIn(0, MAX_ROWS - 1)
                     widget.copy(column = column, row = row, page = widget.page.coerceIn(0, prefs.desktop.pageCount - 1),
                         columns = widget.columns.coerceIn(1, MAX_COLUMNS - column),
-                        rows = widget.rows.coerceIn(1, MAX_ROWS - row))
+                        rows = widget.rows.coerceIn(1, MAX_ROWS - row),
+                        provider = text(widget.provider, 512), restoreKey = text(widget.restoreKey, 512))
                 }.toList()
             val shortcuts = value.shortcuts.asSequence().mapNotNull { shortcut ->
                 val id = key(shortcut.id, 1_024) ?: return@mapNotNull null
                 val packageName = shortcut.packageName.trim()
                 if (packageName.length > 255 || !PACKAGE.matches(packageName)) return@mapNotNull null
                 shortcut.copy(id = id, packageName = packageName, label = text(shortcut.label, 128),
-                    userSerial = shortcut.userSerial.coerceAtLeast(0))
+                    userSerial = shortcut.userSerial.coerceAtLeast(0), container = text(shortcut.container, 512),
+                    backupIcon = backupIcon(shortcut.backupIcon))
             }.distinctBy { Triple(it.packageName, it.id, it.userSerial) }.take(MAX_SHORTCUTS).toList()
             return value.copy(
                 schemaVersion = SCHEMA_VERSION, prefs = prefs,
@@ -360,8 +378,14 @@ class LauncherStore(context: Context) {
                 shortcuts = shortcuts, overrides = overrides, launches = launches,
                 history = value.history.asSequence().map { text(it, MAX_HISTORY_LENGTH) }
                     .filter { it.isNotEmpty() }.distinctBy { it.lowercase(Locale.ROOT) }.take(MAX_HISTORY).toList()
-            ).collapseSmallFolders()
+            ).collapseSmallFolders().sanitizePositions()
         }
+
+        fun backupIcon(icon: BackupIcon?): BackupIcon? = icon?.copy(
+            bitmap = icon.bitmap.takeIf { it.length <= 262_144 && it.matches(Regex("[A-Za-z0-9+/]*={0,2}")) }.orEmpty(),
+            packageName = icon.packageName.takeIf { it.length <= 255 && PACKAGE.matches(it) }.orEmpty(),
+            resourceName = icon.resourceName.takeIf { it.length <= 255 && it.matches(Regex("[A-Za-z0-9_./:]+")) }.orEmpty()
+        )?.takeIf { it.bitmap.isNotEmpty() || (it.packageName.isNotEmpty() && it.resourceName.isNotEmpty()) }
 
         fun sanitizePrefs(value: LauncherPrefs): LauncherPrefs {
             val defaults = LauncherPrefs()

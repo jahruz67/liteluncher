@@ -255,6 +255,17 @@ class AppsRepository(context: Context) : AutoCloseable {
             SystemActions.error(context, "Unlock this shortcut's profile first.")
             return false
         }
+        // Keep visible imported shortcuts pinned to this host as well as the source launcher.
+        // Android may refuse a shortcut that its owning app no longer publishes.
+        runCatching {
+            if (launcher.hasShortcutHostPermission()) {
+                val pinned = launcher.getShortcuts(LauncherApps.ShortcutQuery().apply {
+                    setPackage(shortcut.packageName)
+                    setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+                }, shortcut.user).orEmpty().map { it.id }
+                launcher.pinShortcuts(shortcut.packageName, (pinned + shortcut.id).distinct(), shortcut.user)
+            }
+        }
         return runCatching {
             launcher.startShortcut(shortcut.packageName, shortcut.id, null, null, shortcut.user)
             true

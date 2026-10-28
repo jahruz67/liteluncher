@@ -29,18 +29,32 @@ internal fun LauncherState.layoutLocked(area: LayoutArea): Boolean = when (area)
 }
 
 internal fun LauncherState.layoutSpace(area: LayoutArea): Int = when (area) {
-    LayoutArea.HOME -> prefs.home.rows * prefs.home.columns - homeApps.size - homeFolders.size - shortcuts.size
+    LayoutArea.HOME -> prefs.home.rows * prefs.home.columns - homeApps.size - homeFolders.size - shortcuts.count { it.container == "home" }
     LayoutArea.DOCK -> MAX_LAYOUT_APPS - dockApps.size - dockFolders.size
     LayoutArea.FAVORITES -> prefs.favorites.maxItems - favoriteApps.size
 }.coerceAtLeast(0)
 
 internal fun LauncherState.folderLocked(id: String): Boolean =
-    (id in homeFolders && prefs.home.preventChanges) || (id in dockFolders && prefs.dock.preventChanges)
+    (id in homeFolders && prefs.home.preventChanges) || (id in dockFolders && prefs.dock.preventChanges) ||
+        (desktopApps.values.any { "folder:$id" in it } && prefs.desktop.preventChanges)
 
-internal fun LauncherState.withLayoutApps(area: LayoutArea, keys: List<String>): LauncherState = when (area) {
-    LayoutArea.HOME -> copy(homeApps = keys)
-    LayoutArea.DOCK -> copy(dockApps = keys)
-    LayoutArea.FAVORITES -> copy(favoriteApps = keys)
+internal fun LauncherState.withLayoutApps(area: LayoutArea, keys: List<String>): LauncherState {
+    val before = layoutApps(area)
+    val next = when (area) {
+        LayoutArea.HOME -> copy(homeApps = keys)
+        LayoutArea.DOCK -> copy(dockApps = keys)
+        LayoutArea.FAVORITES -> copy(favoriteApps = keys)
+    }
+    if (area == LayoutArea.FAVORITES || before == keys || before.toSet() != keys.toSet()) return next
+    return next.reorderPositions(if (area == LayoutArea.HOME) "home" else "dock", before, keys)
+}
+
+private fun LauncherState.reorderPositions(container: String, before: List<String>, after: List<String>): LauncherState {
+    if (before.toSet() != after.toSet()) return this
+    val replacements = before.zip(after).toMap()
+    return copy(positions = positions.map { position ->
+        if (position.container == container) replacements[position.key]?.let { position.copy(key = it) } ?: position else position
+    })
 }
 
 internal fun removeLayoutApp(state: LauncherState, area: LayoutArea, key: String): LauncherState {
@@ -95,16 +109,29 @@ internal fun applyAppDrop(state: LauncherState, key: String, source: LayoutArea?
     }).collapseSmallFolders())
 }
 
-// Normalize both restored layouts and edits so a folder always contains at least two apps.
+// Count shortcuts as folder members when normalizing restored layouts and edits.
 internal fun LauncherState.collapseSmallFolders(): LauncherState {
-    val small = folders.filter { it.apps.size < 2 }
+    val small = folders.filter { folder -> folder.apps.size + shortcuts.count { it.container == "folder:${folder.id}" } < 2 }
     if (small.isEmpty()) return this
     val ids = small.map { it.id }.toSet()
+    val replacements = small.associate { folder -> "folder:${folder.id}" to
+        (folder.apps.firstOrNull() ?: shortcuts.find { it.container == "folder:${folder.id}" }?.layoutKey) }
     return copy(
         homeApps = (homeApps + small.filter { it.id in homeFolders }.flatMap { it.apps }).distinct(),
         dockApps = (dockApps + small.filter { it.id in dockFolders }.flatMap { it.apps }).distinct(),
         homeFolders = homeFolders - ids, dockFolders = dockFolders - ids,
-        folders = folders.filterNot { it.id in ids }
+        folders = folders.filterNot { it.id in ids },
+        shortcuts = shortcuts.map { shortcut ->
+            val folder = small.find { shortcut.container == "folder:${it.id}" }
+            if (folder == null) shortcut else shortcut.copy(container = when {
+                folder.id in dockFolders -> "dock"
+                else -> desktopApps.entries.find { "folder:${folder.id}" in it.value }?.let { "desktop:${it.key}" } ?: "home"
+            })
+        },
+        positions = positions.mapNotNull { position ->
+            if (position.key !in replacements) position else replacements[position.key]?.let { position.copy(key = it) }
+        },
+        desktopApps = desktopApps.mapValues { (_, keys) -> keys.mapNotNull { if (it in replacements) replacements[it] else it } }
     )
 }
 
@@ -121,10 +148,13 @@ internal fun applyFolderDrop(state: LauncherState, id: String, source: LayoutAre
     val list = (if (area == LayoutArea.HOME) state.homeFolders else state.dockFolders) - id
     val at = (target as? AppDropTarget.Folder)?.id?.let { list.indexOf(it) } ?: -1
     val ordered = list.toMutableList().apply { add(if (at >= 0) at else size, id) }
-    return LayoutEditResult(state.copy(
+    val next = state.copy(
         homeFolders = if (area == LayoutArea.HOME) ordered else state.homeFolders - id,
         dockFolders = if (area == LayoutArea.DOCK) ordered else state.dockFolders - id
-    ))
+    )
+    val before = if (area == LayoutArea.HOME) state.homeFolders else state.dockFolders
+    return LayoutEditResult(next.reorderPositions(if (area == LayoutArea.HOME) "home" else "dock",
+        before.map { "folder:$it" }, ordered.map { "folder:$it" }))
 }
 
 private fun createLayoutFolder(state: LauncherState, key: String, source: LayoutArea?, target: AppDropTarget.CreateFolder): LayoutEditResult {
@@ -172,7 +202,10 @@ private fun placeFolderApp(state: LauncherState, key: String, source: LayoutArea
     val to = target.atKey?.let { folder.apps.indexOf(it) } ?: -1
     val ordered = if (from >= 0 && to >= 0) folder.apps.moveLayoutItem(from, to)
         else (folder.apps - key).toMutableList().apply { add(if (to >= 0) to.coerceAtMost(size) else size, key) }
-    var next = state.copy(folders = state.folders.map { if (it.id == id) it.copy(apps = ordered) else it })
+    val replacements = folder.apps.zip(ordered).toMap()
+    val entryOrder = if (folder.apps.toSet() == ordered.toSet()) folder.entryOrder.map { replacements[it] ?: it }
+        else folder.entryOrder.filter { it !in folder.apps || it in ordered } + ordered.filter { it !in folder.entryOrder }
+    var next = state.copy(folders = state.folders.map { if (it.id == id) it.copy(apps = ordered, entryOrder = entryOrder.distinct()) else it })
     if (source != null && source != LayoutArea.FAVORITES) next = next.withLayoutApps(source, next.layoutApps(source) - key)
     return LayoutEditResult(next)
 }
@@ -190,5 +223,6 @@ internal fun moveLayoutFolder(state: LauncherState, area: LayoutArea, id: String
     val list = if (area == LayoutArea.HOME) state.homeFolders else state.dockFolders
     val index = list.indexOf(id)
     val next = list.moveLayoutItem(index, index + step)
-    return if (area == LayoutArea.HOME) state.copy(homeFolders = next) else state.copy(dockFolders = next)
+    val changed = if (area == LayoutArea.HOME) state.copy(homeFolders = next) else state.copy(dockFolders = next)
+    return changed.reorderPositions(if (area == LayoutArea.HOME) "home" else "dock", list.map { "folder:$it" }, next.map { "folder:$it" })
 }

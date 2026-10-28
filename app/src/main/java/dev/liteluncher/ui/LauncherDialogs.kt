@@ -135,11 +135,10 @@ fun AppContextMenu(
 
                 if (app.key !in state.homeApps && !state.prefs.home.preventChanges) {
                     ActionRowItem("Add to Home", Icons.Rounded.AddToHomeScreen, {
-                        val full = state.homeApps.size + state.homeFolders.size + state.shortcuts.size >= state.prefs.home.rows * state.prefs.home.columns
+                        val full = state.layoutSpace(LayoutArea.HOME) == 0
                         if (full) android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
                         else actions.update { current ->
-                            val capacity = current.prefs.home.rows * current.prefs.home.columns
-                            if (current.prefs.home.preventChanges || current.homeApps.size + current.homeFolders.size + current.shortcuts.size >= capacity) current
+                            if (current.prefs.home.preventChanges || current.layoutSpace(LayoutArea.HOME) == 0) current
                             else current.copy(homeApps = (current.homeApps + app.key).distinct())
                         }
                         onDismiss()
@@ -303,12 +302,14 @@ private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vect
 fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) -> LauncherState) -> Unit, onDismiss: () -> Unit) {
     var label by remember(app.key) { mutableStateOf(state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label) }
     var iconUri by remember(app.key) { mutableStateOf(state.overrides[app.key]?.iconUri.orEmpty()) }
+    var backupIcon by remember(app.key) { mutableStateOf(state.overrides[app.key]?.backupIcon) }
     var shape by remember(app.key) { mutableStateOf(state.overrides[app.key]?.shape) }
     val context = LocalContext.current
     val pickIcon = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             iconUri = uri.toString()
+            backupIcon = null
         }
     }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit application") }, text = {
@@ -319,7 +320,7 @@ fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) 
                 Icon(Icons.Rounded.Image, null)
                 Text("  Choose icon image")
             }
-            if (iconUri.isNotBlank()) TextButton(onClick = { iconUri = "" }) { Text("Use default icon") }
+            if (iconUri.isNotBlank() || backupIcon != null) TextButton(onClick = { iconUri = ""; backupIcon = null }) { Text("Use default icon") }
 
             Text("Icon Shape", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -334,7 +335,7 @@ fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) 
         }
     }, confirmButton = {
         TextButton(onClick = {
-            update { it.copy(overrides = it.overrides + (app.key to AppOverride(label.trim().takeIf { name -> name != app.label }.orEmpty(), iconUri, shape))) }
+            update { it.copy(overrides = it.overrides + (app.key to AppOverride(label.trim().takeIf { name -> name != app.label }.orEmpty(), iconUri, shape, backupIcon))) }
             onDismiss()
         }) { Text("Save") }
     }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
@@ -373,7 +374,32 @@ fun FolderOverlay(
 
     // Keep the source composed until release so its pointer handler continues the drag.
     Box(Modifier.fillMaxSize().alpha(if (draggingOutside) 0f else 1f).background(ColorForOverlay).clickable(onClick = onDismiss)) {
-        if (stack) {
+        if (folder.entryOrder.isNotEmpty()) {
+            val keys = state.workspaceKeys("folder:${folder.id}")
+            Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp)
+                .onGloballyPositioned { bounds = it.boundsInRoot() }.appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
+                color = background, contentColor = folderContent, shape = RoundedCornerShape(28.dp)) {
+                Column(Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(folder.name, Modifier.weight(1f), fontSize = 22.sp)
+                        IconButton(onClick = { onDismiss(); actions.editFolder(folder) }, enabled = !state.folderLocked(folder.id)) {
+                            Icon(Icons.Rounded.Edit, "Edit folder")
+                        }
+                    }
+                    LazyColumn(Modifier.heightIn(max = 410.dp)) {
+                        items(keys.chunked(3)) { row ->
+                            Row(Modifier.fillMaxWidth()) {
+                                row.forEach { key ->
+                                    WorkspaceEntry(key, "folder:${folder.id}", state, apps, repository,
+                                        state.prefs.home.copy(columns = 3), emptyMap(), actions, Modifier.weight(1f).height(100.dp), onDismiss)
+                                }
+                                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (stack) {
             val left = state.prefs.dock.side == "Left"
             Column(
                 Modifier.align(if (left) Alignment.CenterStart else Alignment.CenterEnd)

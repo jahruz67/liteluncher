@@ -138,13 +138,27 @@ data class LauncherPrefs(
     val behavior: BehaviorPrefs = BehaviorPrefs(), val gestures: Map<Gesture, GestureBinding> = defaultGestures()
 )
 @Serializable
-data class AppOverride(val label: String = "", val iconUri: String = "", val shape: IconShape? = null)
+data class BackupIcon(val bitmap: String = "", val packageName: String = "", val resourceName: String = "")
 @Serializable
-data class FolderItem(val id: String, val name: String, val apps: List<String> = emptyList(), val iconUri: String = "", val shape: IconShape? = null)
+data class AppOverride(val label: String = "", val iconUri: String = "", val shape: IconShape? = null, val backupIcon: BackupIcon? = null)
 @Serializable
-data class WidgetItem(val id: Int, val column: Int = 0, val row: Int = 0, val columns: Int = 4, val rows: Int = 2, val page: Int = 0)
+data class FolderItem(val id: String, val name: String, val apps: List<String> = emptyList(), val iconUri: String = "", val shape: IconShape? = null,
+    val entryOrder: List<String> = emptyList(), val backupIcon: BackupIcon? = null)
 @Serializable
-data class PinnedShortcut(val id: String, val packageName: String, val label: String, val userSerial: Long = 0)
+data class WidgetItem(val id: Int, val column: Int = 0, val row: Int = 0, val columns: Int = 4, val rows: Int = 2, val page: Int = 0,
+    val provider: String = "", val restoreKey: String = "")
+@Serializable
+data class PinnedShortcut(val id: String, val packageName: String, val label: String, val userSerial: Long = 0,
+    val container: String = "home", val backupIcon: BackupIcon? = null)
+
+val PinnedShortcut.layoutKey: String get() = "shortcut:$packageName:$id|$userSerial"
+
+@Serializable
+data class ItemPosition(val key: String, val container: String, val column: Int, val row: Int, val columns: Int = 1, val rows: Int = 1)
+@Serializable
+data class PortableWidget(val key: String, val provider: String, val column: Int, val row: Int, val columns: Int, val rows: Int, val page: Int = 0) {
+    fun location() = WidgetItem(0, column, row, columns, rows, page, provider, key)
+}
 @Serializable
 data class LauncherState(
     val schemaVersion: Int = 1, val prefs: LauncherPrefs = LauncherPrefs(),
@@ -154,5 +168,7 @@ data class LauncherState(
     val dockFolders: List<String> = emptyList(), val widgets: List<WidgetItem> = emptyList(),
     val contacts: List<String> = emptyList(), val shortcuts: List<PinnedShortcut> = emptyList(),
     val overrides: Map<String, AppOverride> = emptyMap(), val history: List<String> = emptyList(),
-    val launches: Map<String, Int> = emptyMap(), val desktopApps: Map<Int, List<String>> = emptyMap(), val initialized: Boolean = false
+    val launches: Map<String, Int> = emptyMap(), val desktopApps: Map<Int, List<String>> = emptyMap(), val initialized: Boolean = false,
+    val positions: List<ItemPosition> = emptyList(), val pendingWidgets: List<PortableWidget> = emptyList(),
+    val lynxSettings: Map<String, String> = emptyMap()
 )

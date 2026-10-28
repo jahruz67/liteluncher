@@ -109,11 +109,12 @@ fun SettingsScreen(
                     "Hidden apps" -> hiddenAppSettings(state, apps, hiddenQuery, { hiddenQuery = it }, onUpdate)
                     "Backup & restore" -> item {
                         SettingsSection("Launcher backup") {
-                            SettingsNote("Export writes your launcher settings and saved layout to a file you choose. Import opens the system file picker to restore a backup.")
+                            SettingsNote("Export writes your launcher settings and saved layout to a file you choose. Import accepts Lite Luncher JSON backups and Lynx Launcher ZIP backups.")
                             SettingsNote("A restore replaces saved launcher data. Installed apps, widget provider data, and Android permission grants are managed by Android.")
+                            SettingsNote("Lynx imports preserve grid cells, gaps, folder order, folder shortcuts, and included icon images. Tap each saved widget placeholder to reconnect it at its original size and position. Android may require widget setup or shortcut re-pinning; icon packs must be installed. Settings without an equivalent are retained in backups but may not affect this launcher.")
                             SettingsLink("Export backup", "Choose a destination using Android's document picker", onExport)
                             SettingsDivider()
-                            SettingsLink("Import backup", "Choose a saved launcher backup", onImport)
+                            SettingsLink("Import backup", "Choose a JSON or Lynx ZIP backup", onImport)
                         }
                     }
                 }

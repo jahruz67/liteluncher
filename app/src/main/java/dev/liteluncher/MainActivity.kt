@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import dev.liteluncher.data.LauncherState
+import dev.liteluncher.data.LauncherBackup
 import dev.liteluncher.data.LayoutArea
 import dev.liteluncher.data.PinnedShortcut
 import dev.liteluncher.data.layoutSpace
@@ -43,7 +44,8 @@ class MainActivity : ComponentActivity() {
             runCatching {
                 val json = model.store.exportJson()
                 withContext(Dispatchers.IO) {
-                    contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(json) }
+                    val portable = LauncherBackup.portableIcons(this@MainActivity, json)
+                    contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(portable) }
                         ?: error("Cannot open the selected document")
                 }
             }.onSuccess { toast("Launcher backup saved") }.onFailure { toast(it.message ?: "Backup failed") }
@@ -54,19 +56,11 @@ class MainActivity : ComponentActivity() {
             runCatching {
                 val json = withContext(Dispatchers.IO) {
                     contentResolver.openInputStream(uri)?.use { stream ->
-                        val output = java.io.ByteArrayOutputStream()
-                        val buffer = ByteArray(8192)
-                        var count = stream.read(buffer)
-                        while (count >= 0) {
-                            require(output.size() + count <= 1024 * 1024) { "Backup exceeds the 1 MiB limit" }
-                            output.write(buffer, 0, count)
-                            count = stream.read(buffer)
-                        }
-                        output.toString("UTF-8")
+                        LauncherBackup.read(stream)
                     } ?: error("Cannot read the selected document")
                 }
                 model.store.importJson(json).getOrThrow()
-            }.onSuccess { toast("Layout restored. Add device widgets again if needed.") }
+            }.onSuccess { toast("Layout restored. Tap saved widget placeholders to reconnect widgets.") }
                 .onFailure { toast(it.message ?: "This backup could not be restored") }
         }
     }
@@ -92,9 +86,11 @@ class MainActivity : ComponentActivity() {
                             require(width in 1..columns && height in 1..rows) { "This widget no longer fits the desktop grid" }
                             val others = state.widgets.filterNot { it.id == item.id }
                             require(item.page in 0 until state.prefs.desktop.pageCount) { "This desktop page is no longer available" }
-                            val placed = WidgetGrid.place(item, others, columns, rows)
+                            val placed = if (item.restoreKey.isNotBlank()) item.takeIf { WidgetGrid.fits(it, others, columns, rows) }
+                                else WidgetGrid.place(item, others, columns, rows)
                             requireNotNull(placed) { "The widget canvas is full. Resize or remove a widget first." }
-                            state.copy(widgets = others + placed)
+                            state.copy(widgets = others + placed,
+                                pendingWidgets = state.pendingWidgets.filterNot { it.key == item.restoreKey })
                         }.getOrThrow()
                     }
                     saved.onFailure {
@@ -119,7 +115,7 @@ class MainActivity : ComponentActivity() {
                 },
                 onContacts = { contactsPermission.launch(Manifest.permission.READ_CONTACTS) },
                 onExport = { exportBackup.launch("lite-luncher-backup.json") },
-                onImport = { importBackup.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
+                onImport = { importBackup.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "application/zip", "application/x-zip-compressed")) },
                 onDefaultHome = { SystemActions.defaultHome(this) }
             )
         }
@@ -141,9 +137,12 @@ class MainActivity : ComponentActivity() {
             model.store.updateAndAwait { state ->
                 val failure = shortcutPinError(state, shortcut)
                 require(failure == null) { failure.orEmpty() }
+                val existing = state.shortcuts.find {
+                    it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial
+                }
                 state.copy(shortcuts = state.shortcuts.filterNot {
                     it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == shortcut.userSerial
-                } + shortcut)
+                } + (existing ?: shortcut))
             }.onFailure { toast(it.message ?: "The shortcut could not be saved") }
         }
     }

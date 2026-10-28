@@ -72,10 +72,12 @@ fun HomeScreen(
     val selected = remember(state.homeApps, appsByKey) { state.homeApps.mapNotNull(appsByKey::get) }
     val foldersById = remember(state.folders) { state.folders.associateBy { it.id } }
     val folders = remember(state.homeFolders, foldersById) { state.homeFolders.mapNotNull(foldersById::get) }
+    val homeShortcuts = remember(state.shortcuts) { state.shortcuts.filter { it.container == "home" } }
     val context = LocalContext.current
     val showSearchBar = Screen.HOME in state.prefs.search.barScreens
     val barAtBottom = state.prefs.search.barAtBottom
 
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier.fillMaxSize()
             .appDropTarget(AppDropTarget.Area(LayoutArea.HOME))
@@ -102,13 +104,19 @@ fun HomeScreen(
             Spacer(Modifier.height(32.dp))
         }
 
-        if (selected.isEmpty() && folders.isEmpty() && state.shortcuts.isEmpty()) {
+        if (state.positions.any { it.container == "home" }) {
+            val dockInset = if (state.prefs.dock.enabled) (56 * state.prefs.dock.iconScale + 12).dp else 0.dp
+            PositionedWorkspace("home", state, apps, repository, prefs, badges, actions,
+                Modifier.weight(1f).fillMaxWidth().padding(
+                    start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
+                    end = if (state.prefs.dock.side == "Right") dockInset else 0.dp))
+        } else if (selected.isEmpty() && folders.isEmpty() && homeShortcuts.isEmpty()) {
             Box(Modifier.weight(1f)) {
                 EmptyCard(Icons.Rounded.Home, "A home of your own", "Hold an app in the app drawer to add it to Home.", "Add apps", { actions.navigate(Screen.APPS) })
             }
         } else {
             val slotCount = prefs.rows * prefs.columns
-            val filledSlots = selected.size + folders.size + state.shortcuts.size
+            val filledSlots = selected.size + folders.size + homeShortcuts.size
             val dockInset = if (state.prefs.dock.enabled) (56 * state.prefs.dock.iconScale + 12).dp else 0.dp
             BoxWithConstraints(Modifier.weight(1f).padding(
                 start = if (state.prefs.dock.side == "Left") dockInset else 0.dp,
@@ -134,7 +142,7 @@ fun HomeScreen(
                 items(folders.take((slotCount - selected.size).coerceAtLeast(0)), key = { "folder:${it.id}" }) { folder ->
                     FolderTile(folder, apps, repository, state, prefs, { actions.folder(folder, false) }, { actions.folderActions(folder) }, Modifier.fillMaxWidth().height(rowHeight))
                 }
-                items(state.shortcuts.take((slotCount - selected.size - folders.size).coerceAtLeast(0)), key = { "shortcut:${it.packageName}:${it.id}:${it.userSerial}" }) { shortcut ->
+                items(homeShortcuts.take((slotCount - selected.size - folders.size).coerceAtLeast(0)), key = { it.layoutKey }) { shortcut ->
                     val app = remember(apps, shortcut.packageName, shortcut.userSerial) {
                         apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
                     }
@@ -179,6 +187,12 @@ fun HomeScreen(
             Spacer(Modifier.height(8.dp))
         } else {
             Spacer(Modifier.height(8.dp))
+        }
+    }
+        if (state.prefs.dock.enabled) {
+            Box(Modifier.align(if (state.prefs.dock.side == "Left") Alignment.CenterStart else Alignment.CenterEnd)) {
+                FloatingDock(state, apps, repository, badges, actions)
+            }
         }
     }
 }

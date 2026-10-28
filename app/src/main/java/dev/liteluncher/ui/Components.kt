@@ -56,6 +56,7 @@ fun iconShape(shape: IconShape): Shape = when (shape) {
 fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, size: Int = 48, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val override = state.overrides[app.key]
+    val backupBitmap = rememberBackupBitmap(override?.backupIcon.takeIf { override?.iconUri.isNullOrBlank() })
     val pack = state.prefs.appearance.iconPack
     val iconRevision by repository.iconRevision.collectAsStateWithLifecycle()
     val cached = if (override?.iconUri.isNullOrBlank()) repository.cachedIconBitmap(app, pack) else null
@@ -77,7 +78,8 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
     }
     val shape = iconShape(override?.shape ?: state.prefs.appearance.iconShape)
     Box(modifier.size(size.dp).clip(shape), contentAlignment = Alignment.Center) {
-        if (bitmap != null) Image(bitmap!!.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        val displayed = backupBitmap ?: bitmap
+        if (displayed != null) Image(displayed.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         else Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {
             Text(app.label.take(1).uppercase(), color = Cerulean, fontSize = (size / 2).sp)
         }
@@ -117,11 +119,12 @@ fun AppTile(
 @Composable
 fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
     onClick: () -> Unit, onLongClick: () -> Unit = {}, modifier: Modifier = Modifier) {
+    val backupBitmap = rememberBackupBitmap(folder.backupIcon)
     val representative = apps.firstOrNull { it.key in folder.apps }
     val area = if (folder.id in state.dockFolders) LayoutArea.DOCK else LayoutArea.HOME
     Column(modifier.clip(RoundedCornerShape(16.dp)).appDropTarget(AppDropTarget.Folder(folder.id), 3)
         .then(if (representative != null) Modifier.appIconGestures(representative, area,
-            !state.folderLocked(folder.id), onClick, onLongClick, movingFolderId = folder.id)
+            !state.folderLocked(folder.id) && (folder.id in state.homeFolders || folder.id in state.dockFolders), onClick, onLongClick, movingFolderId = folder.id)
         else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)).padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (56 * prefs.iconScale).dp
@@ -133,7 +136,8 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
             val members = remember(folder.apps, apps) {
                 folder.apps.asSequence().mapNotNull { key -> apps.find { it.key == key } }.take(4).toList()
             }
-            if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = Cerulean)
+            if (backupBitmap != null) Image(backupBitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            else if (members.isEmpty()) Icon(Icons.Rounded.Folder, null, tint = Cerulean)
             else if (state.prefs.folders.stacked) {
                 members.take(3).reversed().forEachIndexed { index, app ->
                     AppIcon(app, repository, state, (28 * state.prefs.folders.iconScale).toInt(), Modifier.offset((index * 7 - 7).dp, (index * 5 - 5).dp))

@@ -52,7 +52,8 @@ fun WidgetCanvas(
     onChange: (List<WidgetItem>) -> Unit,
     modifier: Modifier = Modifier,
     onWidgetDeleted: ((WidgetItem) -> Unit)? = null,
-    onCanvasBounds: (Rect) -> Unit = {}
+    onCanvasBounds: (Rect) -> Unit = {},
+    overlay: @Composable BoxWithConstraintsScope.() -> Unit = {}
 ) {
     val columns = prefs.columns.coerceIn(1, 24)
     val rows = prefs.rows.coerceIn(1, 32)
@@ -108,6 +109,7 @@ fun WidgetCanvas(
             val cellHeight = canvasHeight / rows
             val gutter = 2.dp
             SideEffect { controller.syncGeometry(prefs, canvasWidth.value, canvasHeight.value) }
+            overlay()
 
             // Behind the widgets, so dismissing the selection cannot swallow the handles.
             if (resizingWidgetId != null) {
