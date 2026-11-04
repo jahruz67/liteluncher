@@ -161,7 +161,6 @@ fun LauncherApp(
         val launched = model.apps.launch(app)
         if (launched) {
             model.store.recordLaunch(app.key)
-            if (query.isNotBlank()) model.store.addHistory(query)
             query = ""
             folder = null
             if (state.prefs.behavior.returnHome) {
@@ -186,7 +185,6 @@ fun LauncherApp(
     val launchShortcut: (NativeShortcut) -> Boolean = { shortcut ->
         val launched = model.apps.launchShortcut(shortcut)
         if (launched) {
-            if (query.isNotBlank()) model.store.addHistory(query)
             query = ""
             folder = null
             if (state.prefs.behavior.returnHome) { panel = ""; navigate(Screen.HOME) }

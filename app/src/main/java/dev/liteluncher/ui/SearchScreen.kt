@@ -147,10 +147,9 @@ fun SearchScreen(
             runCatching { java.net.URI(it).let { uri -> uri.scheme.lowercase() in setOf("http", "https") && !uri.host.isNullOrBlank() && uri.host.contains('.') && uri.userInfo == null } }.getOrDefault(false)
     }
 
-    fun rememberQuery() { if (prefs.history && search.isNotBlank()) actions.update { it.copy(history = (listOf(search) + it.history.filterNot { entry -> entry == search }).take(24)) } }
     fun openWeb() {
         if (search.isNotBlank()) runCatching { SearchEngine.webUrl(search, prefs) }.onSuccess { url ->
-            rememberQuery(); keyboard?.hide(); SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            keyboard?.hide(); SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }.onFailure { android.widget.Toast.makeText(context, "Check your custom search URL in Settings", android.widget.Toast.LENGTH_SHORT).show() }
     }
 
@@ -171,7 +170,7 @@ fun SearchScreen(
                     SearchTarget.WEB -> prefs.web && search.isNotBlank()
                     SearchTarget.PLAY_STORE -> prefs.playStore && search.isNotBlank()
                 } }
-                if (target != null) { rememberQuery(); keyboard?.hide() }
+                if (target != null) keyboard?.hide()
                 when (target) {
                     SearchTarget.APPS -> actions.launch(matches.first())
                     SearchTarget.HIDDEN_APPS -> actions.launch(hiddenMatches.first())
@@ -202,37 +201,26 @@ fun SearchScreen(
 
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
             if (search.isBlank()) {
-                if (prefs.history && state.history.isNotEmpty()) {
-                    item { SectionLabel("Recent searches", "Clear", { actions.update { it.copy(history = emptyList()) } }) }
-                    items(state.history.take(12), key = { it }) { recent ->
-                        val app = apps.firstOrNull {
-                            (prefs.hiddenApps || it.key !in state.hiddenApps) &&
-                                (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).equals(recent, true)
-                        }
+                val recentApps = if (prefs.history) state.history.asSequence().mapNotNull { key ->
+                    apps.firstOrNull { it.key == key }
+                }.filter { prefs.hiddenApps || it.key !in state.hiddenApps }.take(12).toList() else emptyList()
+                if (recentApps.isNotEmpty()) {
+                    item { SectionLabel("Recent apps", "Clear", { actions.update { it.copy(history = emptyList()) } }) }
+                    items(recentApps, key = { it.key }) { app ->
                         Row(
                             Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp)
-                                .clickable { onQuery(recent) }
+                                .clickable { actions.launch(app) }
                                 .clip(RoundedCornerShape(12.dp)),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (app != null) {
-                                AppIcon(app, repository, state, 40)
-                            } else {
-                                Icon(Icons.Rounded.History, null,
-                                    modifier = Modifier.size(20.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .6f))
-                            }
+                            AppIcon(app, repository, state, 40)
                             Text(
-                                text = recent,
+                                text = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label,
                                 fontSize = 14.sp,
                                 modifier = Modifier.padding(start = 12.dp).weight(1f)
                             )
                         }
                     }
-                }
-                if (prefs.hint) item {
-                    Text("Search apps, shortcuts, contacts, settings, or the web.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
                 }
             } else {
                 val hasResults = matches.isNotEmpty() || hiddenMatches.isNotEmpty() || shortcuts.isNotEmpty() || contacts.isNotEmpty() || settings.isNotEmpty() || calculation != null || websiteUrl != null
@@ -264,12 +252,12 @@ fun SearchScreen(
                             }
                             SearchTarget.APPS -> if (matches.isNotEmpty()) {
                                 item { SectionLabel("Applications · ${matches.size}") }
-                                if (prefs.grid.listMode) items(matches, key = { it.key }) { app -> AppListRow(app, repository, state, { rememberQuery(); actions.launch(app) }, { actions.menu(app) }, prefs.grid, draggable = true) }
+                                if (prefs.grid.listMode) items(matches, key = { it.key }) { app -> AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs.grid, draggable = true) }
                                 else items(matches.chunked(prefs.grid.columns)) { row ->
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
                                         row.forEach { app ->
                                             AppTile(app, repository, state, prefs.grid, badges[app.badgeKey] ?: 0,
-                                                { rememberQuery(); keyboard?.hide(); actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f), draggable = true)
+                                                { keyboard?.hide(); actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f), draggable = true)
                                         }
                                         repeat(prefs.grid.columns - row.size) { Spacer(Modifier.weight(1f)) }
                                     }
@@ -278,12 +266,12 @@ fun SearchScreen(
                             SearchTarget.HIDDEN_APPS -> if (hiddenMatches.isNotEmpty()) {
                                 item { SectionLabel("Hidden applications · ${hiddenMatches.size}") }
                                 if (prefs.grid.listMode) items(hiddenMatches, key = { "hidden:${it.key}" }) { app ->
-                                    AppListRow(app, repository, state, { rememberQuery(); actions.launch(app) }, { actions.menu(app) }, prefs.grid)
+                                    AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs.grid)
                                 } else items(hiddenMatches.chunked(prefs.grid.columns)) { row ->
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
                                         row.forEach { app ->
                                             AppTile(app, repository, state, prefs.grid, badges[app.badgeKey] ?: 0,
-                                                { rememberQuery(); keyboard?.hide(); actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f))
+                                                { keyboard?.hide(); actions.launch(app) }, { actions.menu(app) }, Modifier.weight(1f))
                                         }
                                         repeat(prefs.grid.columns - row.size) { Spacer(Modifier.weight(1f)) }
                                     }
@@ -293,7 +281,7 @@ fun SearchScreen(
                                 item { SectionLabel("App shortcuts") }
                                 items(shortcuts, key = { "${it.packageName}:${it.id}:${it.user}" }) { shortcut ->
                                     ActionRow(shortcut.label, Icons.AutoMirrored.Rounded.Shortcut, {
-                                        rememberQuery(); actions.shortcut(shortcut); keyboard?.hide()
+                                        actions.shortcut(shortcut); keyboard?.hide()
                                     }, apps.firstOrNull { it.packageName == shortcut.packageName }?.label)
                                 }
                             }
@@ -301,7 +289,7 @@ fun SearchScreen(
                                 item { SectionLabel("People") }
                                 items(contacts, key = { it.id }) { person ->
                                     ActionRow(person.name, Icons.Rounded.PersonOutline, {
-                                        rememberQuery(); SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(person.lookupUri)))
+                                        SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(person.lookupUri)))
                                     })
                                 }
                             }
@@ -309,7 +297,7 @@ fun SearchScreen(
                                 item { SectionLabel("Device settings") }
                                 items(settings, key = { it.action }) { t ->
                                     ActionRow(t.title, Icons.Rounded.Settings, {
-                                        rememberQuery(); SystemActions.open(context, Intent(t.action))
+                                        SystemActions.open(context, Intent(t.action))
                                     })
                                 }
                             }
@@ -317,7 +305,7 @@ fun SearchScreen(
                                 item {
                                     SectionLabel("Open Website")
                                     ActionRow(websiteUrl, Icons.Rounded.Language, {
-                                        rememberQuery(); keyboard?.hide(); SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(websiteUrl)))
+                                        keyboard?.hide(); SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(websiteUrl)))
                                     })
                                 }
                             }
@@ -331,7 +319,7 @@ fun SearchScreen(
                                 item {
                                     SectionLabel("Google Play")
                                     ActionRow("Search on Google Play", Icons.Rounded.Shop, {
-                                        rememberQuery(); SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(SearchEngine.playStoreUrl(search))))
+                                        SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(SearchEngine.playStoreUrl(search))))
                                     }, search)
                                 }
                             }

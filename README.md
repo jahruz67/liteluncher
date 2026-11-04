@@ -23,7 +23,7 @@ Long-press empty Home space for wallpaper, widgets, settings and layout manageme
 - Floating left/right dock with alignment, icon scaling, folder stacks, scrolling, idle auto-hide, scroll visibility and full-edge presentation. Tap its edge handle to reveal it after hiding.
 - Persistent Home, dock and favorite ordering; folder creation, membership editing, previews and direct fan-out from the dock. Manage layout uses move-up/down controls.
 - Integrated date/clock with 12/24-hour formatting, font choices, sizing and validated hex colors.
-- Search history, voice recognition through the installed Android recognizer, safe inline arithmetic, contacts and native shortcuts. Google, Bing, DuckDuckGo, Yahoo, Wikipedia, Baidu, Ecosia, Startpage and custom URL templates are supported.
+- Recently opened apps, voice recognition through the installed Android recognizer, safe inline arithmetic, contacts and native shortcuts. Google, Bing, DuckDuckGo, Yahoo, Wikipedia, Baidu, Ecosia, Startpage and custom URL templates are supported.
 - Real `AppWidgetHost` hosting: Android bind/configure flows, rounded clipping, non-overlapping grid placement, move/resize controls, refresh and removal. Hold a widget or use its accessibility edit action to manage it.
 - Launcher, dock and search themes; Light/Dark/System/Advanced mode; wallpaper dim/parallax; appfilter-based icon packs; custom per-app images; shape masks; system bar controls; notification dots/counts; gesture mappings to screens, apps and selectable native shortcuts.
 - Serialized DataStore preference writes and versioned JSON backup/import through Android's document picker. Import validates size, nesting, schema, values and URIs before replacing state.

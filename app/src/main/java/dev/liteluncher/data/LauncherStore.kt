@@ -169,17 +169,11 @@ class LauncherStore(context: Context) {
             }
             val count = (launches[safeKey] ?: 0).coerceAtLeast(0)
             launches[safeKey] = if (count == Int.MAX_VALUE) count else count + 1
-            current.copy(launches = launches)
-        }
-    }
-
-    fun addHistory(query: String) {
-        val entry = text(query, MAX_HISTORY_LENGTH)
-        if (entry.isEmpty()) return
-        update { current ->
-            if (!current.prefs.search.history) current else current.copy(
-                history = (listOf(entry) + current.history.filterNot { it.equals(entry, ignoreCase = true) })
-                    .take(MAX_HISTORY)
+            current.copy(
+                launches = launches,
+                history = if (current.prefs.search.history) {
+                    (listOf(safeKey) + current.history.filterNot { it == safeKey }).take(MAX_HISTORY)
+                } else current.history
             )
         }
     }
