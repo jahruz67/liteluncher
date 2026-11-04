@@ -339,7 +339,7 @@ fun LauncherApp(
     val drag = remember { AppDragController(onDragStart = { appMenu = null; folderMenu = null }) { item, target -> latestDrop(item, target) } }
     var previousPanel by remember { mutableStateOf(panel) }
     LaunchedEffect(panel) {
-        drag.cancel()
+        if (drag.active == null) drag.cancel()
         if (previousPanel.isNotEmpty() && panel.isEmpty() && state.prefs.behavior.returnHome) navigate(Screen.HOME)
         previousPanel = panel
     }

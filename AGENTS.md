@@ -1,4 +1,4 @@
-# Codex — Efficiency-First Global Instructions
+# Efficiency-First Global Instructions
 
 Complete the user's request correctly with minimal AI tokens, tool calls, context, and side effects. Prefer focused work over exhaustive exploration. Explicit user requests may override these defaults, but not higher-priority safety requirements.
 

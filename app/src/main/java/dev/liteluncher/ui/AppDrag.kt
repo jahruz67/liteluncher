@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -22,6 +23,8 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
@@ -123,6 +126,8 @@ internal fun Modifier.appIconGestures(
     val menu by rememberUpdatedState(onMenu)
     val click by rememberUpdatedState(onClick)
     val feedback = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
     val showMenu: () -> Unit = { drag.menuAnchor = bounds.value; menu?.invoke() }
     if (!enabled) return onGloballyPositioned { bounds.value = it.boundsInRoot() }
         .combinedClickable(onClick = onClick ?: {}, onLongClick = if (onMenu != null) showMenu else null)
@@ -138,7 +143,14 @@ internal fun Modifier.appIconGestures(
         .then(if (drag.active?.app?.key != app.key && drag.active != null &&
             (target != null && drag.hovered?.target == target || folderTarget != null && drag.hovered?.target == folderTarget))
             Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = .2f), RoundedCornerShape(16.dp)) else Modifier)
-        .then(if (onClick != null) Modifier.clickable { click?.invoke() } else Modifier)
+        .then(if (onClick != null) Modifier
+            .graphicsLayer {
+                val scale = if (pressed) .94f else 1f
+                scaleX = scale
+                scaleY = scale
+            }
+            .clickable(interactionSource = interactionSource, indication = null) { click?.invoke() }
+        else Modifier)
         .semantics { if (onMenu != null) onLongClick(label = "App actions") { showMenu(); true } }
         .pointerInput(drag, token) {
             detectDragGesturesAfterLongPress(
