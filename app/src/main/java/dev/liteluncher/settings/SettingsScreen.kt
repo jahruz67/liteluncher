@@ -84,7 +84,7 @@ fun SettingsScreen(
                 "App drawer" -> "Application List"
                 "Behavior" -> "Behavior & Animations"
                 else -> page
-            }, onBack = back) {
+            }, onBack = back, pageKey = page, showBack = page != "Settings") {
                 when (page) {
                     "Settings" -> settingsIndex(state, { page = it }, onManageScreens, onDefaultHome)
                     "Home" -> homePreferences(state.prefs, apps, update)
@@ -161,10 +161,10 @@ private fun LazyListScope.settingsIndex(
 
 @Composable
 private fun SettingsIndexLink(title: String, icon: ImageVector, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(44.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(14.dp))
-        Text(title, fontSize = 14.sp)
+    Row(Modifier.fillMaxWidth().height(96.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(28.dp))
+        Text(title, fontSize = 30.sp)
     }
 }
 

@@ -52,7 +52,13 @@ internal fun LauncherState.withLayoutApps(area: LayoutArea, keys: List<String>):
 
 private fun LauncherState.reorderPositions(container: String, before: List<String>, after: List<String>): LauncherState {
     if (before.toSet() != after.toSet()) return this
-    val replacements = before.zip(after).toMap()
+    val slots = workspacePositions(container,
+        if (container == "home") prefs.home.columns else 1,
+        if (container == "home") prefs.home.rows else MAX_LAYOUT_APPS)
+        .filter { it.key in before }
+        .sortedWith(compareBy<ItemPosition> { it.row }.thenBy { it.column })
+    if (slots.size != before.size) return this
+    val replacements = after.zip(slots).associate { (key, slot) -> slot.key to key }
     return copy(positions = positions.map { position ->
         if (position.container == container) replacements[position.key]?.let { position.copy(key = it) } ?: position else position
     })

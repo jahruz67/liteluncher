@@ -131,12 +131,16 @@ internal fun Modifier.appIconGestures(
     val showMenu: () -> Unit = { drag.menuAnchor = bounds.value; menu?.invoke() }
     if (!enabled) return onGloballyPositioned { bounds.value = it.boundsInRoot() }
         .combinedClickable(onClick = onClick ?: {}, onLongClick = if (onMenu != null) showMenu else null)
-    DisposableEffect(drag, token) { onDispose { drag.cancel(token) } }
+    DisposableEffect(drag, token) {
+        onDispose {
+            if (drag.active?.token !== token) drag.cancel(token)
+        }
+    }
     val target: AppDropTarget? = if (movingFolderId != null) AppDropTarget.Folder(movingFolderId)
-        else if (folderId != null) AppDropTarget.Folder(folderId, app.key) else area?.takeIf { it != LayoutArea.DOCK }?.let { AppDropTarget.Area(it, app.key) }
+        else if (folderId != null) AppDropTarget.Folder(folderId, app.key) else area?.let { AppDropTarget.Area(it, app.key) }
     val folderTarget = if (movingFolderId == null && folderId == null && area != null && area != LayoutArea.FAVORITES && area != LayoutArea.DOCK)
         AppDropTarget.CreateFolder(area, app.key) else null
-    return then(if (target != null) Modifier.appDropTarget(target, if (folderId != null) 5 else 2) else Modifier)
+    return then(if (target != null) Modifier.appDropTarget(target, if (folderId != null) 5 else 4) else Modifier)
         .then(if (folderTarget != null) Modifier.appDropTarget(folderTarget, 3, centerOnly = true) else Modifier)
         .onGloballyPositioned { bounds.value = it.boundsInRoot() }
         .alpha(if (drag.active?.token === token) .3f else 1f)
@@ -157,7 +161,6 @@ internal fun Modifier.appIconGestures(
                 onDragStart = { point ->
                     feedback.performHapticFeedback(HapticFeedbackType.LongPress)
                     drag.begin(app, area, token, bounds.value.topLeft + point, viewConfiguration.touchSlop, folderId, movingFolderId, desktopPage)
-                    showMenu()
                 },
                 onDragEnd = { drag.finish(token) },
                 onDragCancel = { drag.cancel(token) },

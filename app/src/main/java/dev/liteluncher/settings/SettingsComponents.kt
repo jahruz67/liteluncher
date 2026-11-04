@@ -66,9 +66,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
-internal val SettingsGreen = Color(0xFF82B1D5)
-internal val SettingsBackground = Color(0xFF454545)
-internal val SettingsPanel = Color(0xFF505050)
+internal val SettingsGreen = Color(0xFF6FA3DC)
+internal val SettingsBackground = Color(0xFF282828)
+internal val SettingsPanel = Color(0xFF3D3D3D)
 private val SettingsToolbar = Color(0xFF45657D)
 
 @Composable
@@ -98,6 +98,7 @@ internal fun SettingsFrame(
     title: String,
     onBack: () -> Unit,
     pageKey: String = title,
+    showBack: Boolean = true,
     background: Color = SettingsBackground,
     content: LazyListScope.() -> Unit
 ) {
@@ -109,15 +110,17 @@ internal fun SettingsFrame(
             topBar = {
                 Surface(color = if (background == Color.Transparent) Color.Transparent else SettingsToolbar) {
                     Row(
-                        Modifier.fillMaxWidth().height(48.dp),
+                        Modifier.fillMaxWidth().statusBarsPadding().height(112.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        if (showBack) {
+                            IconButton(onClick = onBack, modifier = Modifier.size(56.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(32.dp))
+                            }
                         }
-                        Text(title, fontSize = 16.sp,
+                        Text(title, fontSize = 32.sp,
                             fontWeight = FontWeight.Normal, modifier = Modifier.weight(1f))
-                        Spacer(Modifier.width(16.dp))
+                        Spacer(Modifier.width(24.dp))
                     }
                 }
             }
@@ -135,9 +138,9 @@ internal fun SettingsFrame(
 @Composable
 internal fun SettingsSection(title: String, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Text(title, color = SettingsGreen, fontSize = 12.sp, fontStyle = FontStyle.Italic,
-            modifier = Modifier.fillMaxWidth().background(SettingsPanel).padding(horizontal = 12.dp, vertical = 5.dp))
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) { content() }
+        Text(title, color = SettingsGreen, fontSize = 30.sp, fontStyle = FontStyle.Italic,
+            modifier = Modifier.fillMaxWidth().background(SettingsPanel).padding(horizontal = 28.dp, vertical = 10.dp))
+        Column(Modifier.fillMaxWidth().padding(horizontal = 28.dp)) { content() }
     }
 }
 

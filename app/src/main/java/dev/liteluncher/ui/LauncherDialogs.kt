@@ -95,7 +95,7 @@ fun AppContextMenu(
             color = MenuBackground,
             contentColor = MenuText,
             shadowElevation = 8.dp,
-            modifier = Modifier.width(224.dp).heightIn(max = 360.dp)
+            modifier = Modifier.width(436.dp).heightIn(max = 520.dp)
         ) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 ActionRowItem("Edit", Icons.Default.Edit, onEdit)
@@ -267,14 +267,14 @@ private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vect
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = if (compact) 40.dp else 48.dp)
+            .heightIn(min = if (compact) 64.dp else 88.dp)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(if (compact) 24.dp else 28.dp))
-        Spacer(Modifier.width(22.dp))
-        Text(label, fontSize = if (compact) 16.sp else 20.sp, fontWeight = FontWeight.Normal, color = MenuText)
+        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(if (compact) 32.dp else 48.dp))
+        Spacer(Modifier.width(28.dp))
+        Text(label, fontSize = if (compact) 22.sp else 32.sp, fontWeight = FontWeight.Normal, color = MenuText)
     }
 }
 
@@ -459,13 +459,28 @@ fun FolderOverlay(
 @Composable
 internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean, onEdit: () -> Unit, onDismiss: () -> Unit, onRemove: () -> Unit = {}) {
     AnchoredIconMenu(anchor, onDismiss) {
-        Surface(shape = RoundedCornerShape(10.dp), color = MenuBackground, shadowElevation = 8.dp, modifier = Modifier.width(224.dp)) {
-            Column(Modifier.padding(12.dp)) {
-                Text(folder.name, color = Color.White)
-                if (!locked) ActionRowItem("Edit folder", Icons.Rounded.Edit, onEdit)
-                if (!locked) ActionRowItem("Delete folder", Icons.Rounded.DeleteOutline, onRemove)
+        Surface(shape = RoundedCornerShape(10.dp), color = MenuBackground, shadowElevation = 8.dp, modifier = Modifier.width(300.dp)) {
+            Column {
+                if (!locked) FolderActionRowItem("Edit", Icons.Rounded.Edit, onEdit)
+                if (!locked) FolderActionRowItem("Remove", Icons.Rounded.DeleteOutline, onRemove)
             }
         }
+    }
+}
+
+@Composable
+private fun FolderActionRowItem(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().height(64.dp).clickable(onClick = onClick).padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(32.dp))
+        Spacer(Modifier.width(20.dp))
+        Text(label, fontSize = 22.sp, color = MenuText)
     }
 }
 
