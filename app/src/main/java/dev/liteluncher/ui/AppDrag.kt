@@ -141,7 +141,7 @@ internal fun Modifier.appIconGestures(
     val folderTarget = if (movingFolderId == null && folderId == null && area != null && area != LayoutArea.FAVORITES && area != LayoutArea.DOCK)
         AppDropTarget.CreateFolder(area, app.key) else null
     return then(if (target != null) Modifier.appDropTarget(target, if (folderId != null) 5 else 4) else Modifier)
-        .then(if (folderTarget != null) Modifier.appDropTarget(folderTarget, 3, centerOnly = true) else Modifier)
+        .then(if (folderTarget != null) Modifier.appDropTarget(folderTarget, 5, centerOnly = true) else Modifier)
         .onGloballyPositioned { bounds.value = it.boundsInRoot() }
         .alpha(if (drag.active?.token === token) .3f else 1f)
         .then(if (drag.active?.app?.key != app.key && drag.active != null &&

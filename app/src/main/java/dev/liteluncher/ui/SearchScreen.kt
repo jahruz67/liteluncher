@@ -49,42 +49,40 @@ fun LauncherSearchField(
 ) {
     val foreground = surfaceContent(theme)
     Row(
-        Modifier.fillMaxWidth().height(80.dp).clip(RoundedCornerShape(50))
+        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(50))
             .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
             .then(if (onActivate != null) Modifier.clickable(onClick = onActivate) else Modifier)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(64.dp)) {
-            Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back to home", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(32.dp))
-        } else Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.Search, null, tint = foreground.copy(alpha = .65f), modifier = Modifier.size(32.dp))
+        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back to home", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(21.dp))
+        } else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Search, null, tint = foreground.copy(alpha = .65f), modifier = Modifier.size(21.dp))
         }
         if (onActivate != null) {
-            Text(placeholder, color = foreground.copy(alpha = .65f), fontSize = 26.sp, modifier = Modifier.weight(1f))
+            Text(placeholder, color = foreground.copy(alpha = .65f), fontSize = 14.sp, modifier = Modifier.weight(1f))
         } else BasicTextField(
             value = query,
             onValueChange = { onQuery(it.take(512)) },
             modifier = Modifier.weight(1f).then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
             singleLine = true,
-            textStyle = LocalTextStyle.current.copy(color = foreground, fontSize = 26.sp),
+            textStyle = LocalTextStyle.current.copy(color = foreground, fontSize = 14.sp),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
             decorationBox = { input ->
                 Box {
-                    if (query.isEmpty()) Text(placeholder, color = foreground.copy(alpha = .65f), fontSize = 26.sp)
+                    if (query.isEmpty()) Text(placeholder, color = foreground.copy(alpha = .65f), fontSize = 14.sp)
                     input()
                 }
             }
         )
-        if (query.isNotEmpty()) IconButton(onClick = { onQuery("") }, modifier = Modifier.size(64.dp)) {
-            Icon(Icons.Rounded.Close, "Clear search", tint = foreground, modifier = Modifier.size(30.dp))
+        if (query.isNotEmpty()) IconButton(onClick = { onQuery("") }, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Rounded.Close, "Clear search", tint = foreground, modifier = Modifier.size(19.dp))
         }
-        if (query.isNotEmpty()) Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.MoreVert, "Search options", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(30.dp))
-        } else if (onVoice != null) IconButton(onClick = onVoice, modifier = Modifier.size(64.dp)) {
-            Icon(Icons.Rounded.MicNone, "Voice search", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(30.dp))
+        if (onVoice != null) IconButton(onClick = onVoice, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Rounded.MicNone, "Voice search", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(21.dp))
         }
     }
 }
@@ -193,7 +191,7 @@ fun SearchScreen(
         )
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(top = 20.dp, start = 18.dp, end = 18.dp).imePadding()) {
+    Column(Modifier.fillMaxSize().padding(horizontal = prefs.grid.borderPaddingDp.dp).imePadding()) {
 
         if (!prefs.barAtBottom) {
             searchField()
@@ -207,25 +205,18 @@ fun SearchScreen(
                     apps.firstOrNull { it.key == key }
                 }.filter { prefs.hiddenApps || it.key !in state.hiddenApps }.take(12).toList() else emptyList()
                 if (recentApps.isNotEmpty()) {
-                    item {
-                        Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(36.dp))
-                            Spacer(Modifier.width(16.dp))
-                            Text("Recent Searches", fontSize = 30.sp, modifier = Modifier.weight(1f))
-                            HorizontalDivider(Modifier.width(220.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f))
-                        }
-                    }
+                    item { SectionLabel("Recent apps", "Clear", { actions.update { it.copy(history = emptyList()) } }) }
                     items(recentApps, key = { it.key }) { app ->
                         Row(
-                            Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 4.dp)
+                            Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp)
                                 .clickable { actions.launch(app) }
                                 .clip(RoundedCornerShape(12.dp)),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            AppIcon(app, repository, state, 72)
+                            AppIcon(app, repository, state, 40)
                             Text(
                                 text = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label,
-                                fontSize = 28.sp,
+                                fontSize = 14.sp,
                                 modifier = Modifier.padding(start = 12.dp).weight(1f)
                             )
                         }
