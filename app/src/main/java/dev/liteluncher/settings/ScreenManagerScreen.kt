@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -109,7 +110,7 @@ fun ScreenManagerScreen(
                             current.prefs.navigation.copy(advanced = enabling))) }
                         showAdvanced = enabling
                     }, Modifier.weight(2f))
-                    ManagerControl("Reset", Icons.Rounded.RotateLeft, {
+                    ManagerControl("Reset", Icons.AutoMirrored.Rounded.RotateLeft, {
                         onUpdate { current -> current.copy(prefs = current.prefs.copy(navigation = NavigationPrefs(),
                             desktop = current.prefs.desktop.copy(pageCount = current.minimumDesktopPages))) }
                     }, Modifier.weight(1f), enabled = navigation != NavigationPrefs() || state.prefs.desktop.pageCount != 1)

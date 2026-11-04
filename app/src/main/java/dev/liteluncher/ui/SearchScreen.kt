@@ -2,6 +2,8 @@
 
 package dev.liteluncher.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -15,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,10 +27,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -55,7 +56,7 @@ fun LauncherSearchField(
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
-            Icon(Icons.Rounded.ArrowBack, "Back to home", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(21.dp))
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back to home", tint = foreground.copy(alpha = .75f), modifier = Modifier.size(21.dp))
         } else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
             Icon(Icons.Rounded.Search, null, tint = foreground.copy(alpha = .65f), modifier = Modifier.size(21.dp))
         }
@@ -94,7 +95,7 @@ fun SearchScreen(
     val prefs = state.prefs.search
     val drag = LocalAppDrag.current
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val clipboard = context.getSystemService(ClipboardManager::class.java)
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
     val search = query.trim()
@@ -177,7 +178,7 @@ fun SearchScreen(
                     SearchTarget.CONTACTS -> SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(contacts.first().lookupUri)))
                     SearchTarget.SHORTCUTS -> actions.shortcut(shortcuts.first())
                     SearchTarget.SETTINGS -> SystemActions.open(context, Intent(settings.first().action))
-                    SearchTarget.MATH -> clipboard.setText(AnnotatedString(calculation!!))
+                    SearchTarget.MATH -> clipboard?.setPrimaryClip(ClipData.newPlainText("Calculation", calculation!!))
                     SearchTarget.WEBSITE -> SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(websiteUrl!!)))
                     SearchTarget.WEB -> openWeb()
                     SearchTarget.PLAY_STORE -> SystemActions.open(context, Intent(Intent.ACTION_VIEW, Uri.parse(SearchEngine.playStoreUrl(search))))
@@ -249,7 +250,7 @@ fun SearchScreen(
                             SearchTarget.MATH -> if (calculation != null) {
                                 item {
                                     SectionLabel("Calculator")
-                                    Surface(onClick = { clipboard.setText(AnnotatedString(calculation)) }, color = MaterialTheme.colorScheme.primary.copy(alpha = .11f), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Surface(onClick = { clipboard?.setPrimaryClip(ClipData.newPlainText("Calculation", calculation)) }, color = MaterialTheme.colorScheme.primary.copy(alpha = .11f), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
                                         Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Rounded.Calculate, null, tint = MaterialTheme.colorScheme.primary)
                                             Column(Modifier.padding(start = 17.dp).weight(1f)) {
@@ -291,7 +292,7 @@ fun SearchScreen(
                             SearchTarget.SHORTCUTS -> if (shortcuts.isNotEmpty()) {
                                 item { SectionLabel("App shortcuts") }
                                 items(shortcuts, key = { "${it.packageName}:${it.id}:${it.user}" }) { shortcut ->
-                                    ActionRow(shortcut.label, Icons.Rounded.Shortcut, {
+                                    ActionRow(shortcut.label, Icons.AutoMirrored.Rounded.Shortcut, {
                                         rememberQuery(); actions.shortcut(shortcut); keyboard?.hide()
                                     }, apps.firstOrNull { it.packageName == shortcut.packageName }?.label)
                                 }

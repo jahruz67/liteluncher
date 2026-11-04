@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Info
@@ -102,7 +103,7 @@ fun AppContextMenu(
                 if (removable) ActionRowItem("Remove", Icons.Default.Close, onRemove)
 
                 if (app.key !in state.homeApps && !state.prefs.home.preventChanges) {
-                    ActionRowItem("Add to Home", Icons.Rounded.AddToHomeScreen, {
+                    ActionRowItem("Add to Home", Icons.AutoMirrored.Rounded.AddToHomeScreen, {
                         val full = state.layoutSpace(LayoutArea.HOME) == 0
                         if (full) android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
                         else actions.update { current ->
@@ -155,7 +156,7 @@ fun AppContextMenu(
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Rounded.Shortcut, null, tint = MenuIcon, modifier = Modifier.size(20.dp))
+                                Icon(Icons.AutoMirrored.Rounded.Shortcut, null, tint = MenuIcon, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(12.dp))
                                 Text(shortcut.label, fontSize = 16.sp, color = MenuText, maxLines = 1, modifier = Modifier.weight(1f))
                                 IconButton(

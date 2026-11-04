@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -93,7 +94,7 @@ internal fun ShortcutTile(shortcut: PinnedShortcut, state: LauncherState, apps: 
         when {
             bitmap != null -> Image(bitmap.asImageBitmap(), shortcut.label, Modifier.size(size.dp), contentScale = ContentScale.Fit)
             app != null -> AppIcon(app, repository, state, size)
-            else -> Icon(Icons.Rounded.Shortcut, shortcut.label, Modifier.size(size.dp))
+            else -> Icon(Icons.AutoMirrored.Rounded.Shortcut, shortcut.label, Modifier.size(size.dp))
         }
         if (prefs.labels) Text(shortcut.label, modifier = Modifier.padding(top = 5.dp), fontSize = (12 * prefs.textScale).sp,
             maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
@@ -225,7 +226,7 @@ private fun WorkspaceListEntry(key: String, container: String, state: LauncherSt
                 when {
                     icon != null -> Image(icon.asImageBitmap(), null, Modifier.size(40.dp), contentScale = ContentScale.Fit)
                     app != null -> AppIcon(app, repository, state, 40)
-                    else -> Icon(Icons.Rounded.Shortcut, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
+                    else -> Icon(Icons.AutoMirrored.Rounded.Shortcut, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
                 }
                 Text(shortcut.label, Modifier.weight(1f).padding(start = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)

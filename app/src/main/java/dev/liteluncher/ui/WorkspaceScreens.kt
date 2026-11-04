@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -169,8 +170,8 @@ fun HomeScreen(
                         Box {
                             if (backup != null) Image(backup.asImageBitmap(), shortcut.label, Modifier.size((56 * prefs.iconScale).dp), contentScale = ContentScale.Fit)
                             else if (app != null) AppIcon(app, repository, state, (56 * prefs.iconScale).toInt())
-                            else Icon(Icons.Rounded.Shortcut, null, modifier = Modifier.size(48.dp))
-                            Icon(Icons.Rounded.Shortcut, null, tint = Cerulean, modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).background(Ink, CircleShape))
+                            else Icon(Icons.AutoMirrored.Rounded.Shortcut, null, modifier = Modifier.size(48.dp))
+                            Icon(Icons.AutoMirrored.Rounded.Shortcut, null, tint = Cerulean, modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).background(Ink, CircleShape))
                         }
                         if (prefs.labels) Text(shortcut.label, fontSize = (12 * prefs.textScale).sp, maxLines = if (prefs.multiline) 2 else 1, modifier = Modifier.padding(top = 8.dp))
                     }

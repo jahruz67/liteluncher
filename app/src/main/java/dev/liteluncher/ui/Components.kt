@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -307,7 +308,7 @@ fun DestinationCapsule(destination: String, modifier: Modifier = Modifier) {
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Rounded.DriveFileMove, null, tint = Cerulean, modifier = Modifier.size(16.dp))
+            Icon(Icons.AutoMirrored.Rounded.DriveFileMove, null, tint = Cerulean, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             Text(destination, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }

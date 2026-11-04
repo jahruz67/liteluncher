@@ -186,6 +186,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Suppress("DEPRECATION")
+    @Deprecated("Use the Activity Result API instead.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (::widgets.isInitialized && widgets.onActivityResult(requestCode, resultCode, data)) return
         super.onActivityResult(requestCode, resultCode, data)

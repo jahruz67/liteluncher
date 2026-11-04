@@ -18,6 +18,7 @@ import org.xmlpull.v1.XmlPullParser
 /** Converts a portable JSON backup or a Lynx XML archive before any saved state is changed. */
 internal object LauncherBackup {
     private const val MAX_BYTES = 1_048_576
+    private val json = Json { encodeDefaults = true }
     private val xmlRoots = mapOf(
         "settings.xml" to "settings", "desktop.xml" to "desktops", "dock.xml" to "dock",
         "folders.xml" to "folders", "favorite_applications.xml" to "favorite_applications",
@@ -34,13 +35,12 @@ internal object LauncherBackup {
         require(listOf("settings.xml", "desktop.xml", "dock.xml").all { it in documents }) {
             "This ZIP is not a supported Lynx launcher backup"
         }
-        return Json { encodeDefaults = true }.encodeToString(convert(documents, images))
+        return json.encodeToString(convert(documents, images))
     }
 
     /** Embed picked icon images so exports do not depend on another device's URI grants. */
     fun portableIcons(context: Context, json: String, onMissingIcons: (Int) -> Unit = {}): String {
-        val format = Json { encodeDefaults = true }
-        val state = format.decodeFromString(LauncherState.serializer(), json)
+        val state = this.json.decodeFromString(LauncherState.serializer(), json)
         var missing = 0
         fun icon(uri: String, fallback: BackupIcon?): BackupIcon? = runCatching { readIcon(context, uri) }
             .getOrElse { if (fallback == null) missing++; fallback }
@@ -51,7 +51,7 @@ internal object LauncherBackup {
             if (folder.iconUri.isBlank()) folder else folder.copy(iconUri = "", backupIcon = icon(folder.iconUri, folder.backupIcon))
         }
         onMissingIcons(missing)
-        return format.encodeToString(state.copy(overrides = overrides, folders = folders)).also {
+        return this.json.encodeToString(state.copy(overrides = overrides, folders = folders)).also {
             require(it.toByteArray(Charsets.UTF_8).size <= MAX_BYTES) { "Backup with icon images exceeds the 1 MiB limit" }
         }
     }

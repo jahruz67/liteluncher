@@ -99,6 +99,7 @@ private val deletedPositionSaver = Saver<ItemPosition?, ArrayList<Any>>(
     restore = { saved -> ItemPosition(saved[0] as String, saved[1] as String, saved[2] as Int, saved[3] as Int, saved[4] as Int, saved[5] as Int) }
 )
 
+@Suppress("DEPRECATION")
 @Composable
 fun LauncherApp(
     model: LauncherViewModel, widgets: WidgetController, homeSignal: Int, permissionSignal: Int,

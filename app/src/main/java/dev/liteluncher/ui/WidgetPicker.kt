@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -108,7 +109,7 @@ fun WidgetPicker(
             .background(Color.Black.copy(alpha = .35f)).clickable {}
             .windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onDismiss) { Icon(Icons.Rounded.ArrowBack, "Close widgets", tint = Color.White) }
+                IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Close widgets", tint = Color.White) }
                 Box(Modifier.weight(1f).padding(vertical = 8.dp)) {
                     LauncherSearchField(query, { query = it }, "Search widgets", {}, null, SurfaceTheme.GLASS)
                 }
