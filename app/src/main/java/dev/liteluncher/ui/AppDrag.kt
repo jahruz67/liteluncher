@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +21,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -45,6 +48,7 @@ internal class AppDragController(private val onDragStart: () -> Unit, private va
         private set
     var menuAnchor by mutableStateOf(Rect.Zero)
     private var held: DraggedApp? = null
+    val isHolding: Boolean get() = held != null
     private var start = Offset.Zero
     private var slop = 0f
     val regions = mutableStateMapOf<Any, AppDropRegion>()
@@ -65,8 +69,8 @@ internal class AppDragController(private val onDragStart: () -> Unit, private va
         active = null
     }
 
-    fun move(token: Any, amount: Offset) {
-        val item = held?.takeIf { it.token === token } ?: return
+    fun move(amount: Offset) {
+        val item = held ?: return
         position += amount
         if (active == null && (position - start).getDistance() > slop) {
             active = item
@@ -81,10 +85,10 @@ internal class AppDragController(private val onDragStart: () -> Unit, private va
         }
     }
 
-    fun finish(token: Any) {
-        val item = held?.takeIf { it.token === token } ?: return
+    fun finish() {
+        val item = held ?: return
         val target = if (active != null) hovered?.target else null
-        cancel(token)
+        cancel()
         if (target != null) onDrop(item, target)
     }
 
@@ -97,6 +101,27 @@ internal class AppDragController(private val onDragStart: () -> Unit, private va
 }
 
 internal val LocalAppDrag = staticCompositionLocalOf<AppDragController?> { null }
+
+// The launcher remains in the pointer hit path when navigation removes the source icon.
+internal fun Modifier.appDragInput(drag: AppDragController): Modifier = pointerInput(drag) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        try {
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.changes.count { it.pressed } > 1) drag.cancel()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (drag.isHolding) {
+                    drag.move(change.position - change.previousPosition)
+                    if (!change.pressed) drag.finish()
+                    change.consume()
+                }
+            } while (event.changes.any { it.pressed })
+        } finally {
+            drag.cancel()
+        }
+    }
+}
 
 @Composable
 internal fun Modifier.appDropTarget(target: AppDropTarget, priority: Int = 0, centerOnly: Boolean = false): Modifier {
@@ -131,11 +156,6 @@ internal fun Modifier.appIconGestures(
     val showMenu: () -> Unit = { drag.menuAnchor = bounds.value; menu?.invoke() }
     if (!enabled) return onGloballyPositioned { bounds.value = it.boundsInRoot() }
         .combinedClickable(onClick = onClick ?: {}, onLongClick = if (onMenu != null) showMenu else null)
-    DisposableEffect(drag, token) {
-        onDispose {
-            if (drag.active?.token !== token) drag.cancel(token)
-        }
-    }
     val target: AppDropTarget? = if (movingFolderId != null) AppDropTarget.Folder(movingFolderId)
         else if (folderId != null) AppDropTarget.Folder(folderId, app.key) else area?.let { AppDropTarget.Area(it, app.key) }
     val folderTarget = if (movingFolderId == null && folderId == null && area != null && area != LayoutArea.FAVORITES && area != LayoutArea.DOCK)
@@ -161,10 +181,12 @@ internal fun Modifier.appIconGestures(
                 onDragStart = { point ->
                     feedback.performHapticFeedback(HapticFeedbackType.LongPress)
                     drag.begin(app, area, token, bounds.value.topLeft + point, viewConfiguration.touchSlop, folderId, movingFolderId, desktopPage)
+                    showMenu()
                 },
-                onDragEnd = { drag.finish(token) },
-                onDragCancel = { drag.cancel(token) },
-                onDrag = { change, amount -> change.consume(); drag.move(token, amount) }
+                // The root owns movement and completion, including after this icon is disposed.
+                onDragEnd = {},
+                onDragCancel = {},
+                onDrag = { change, _ -> change.consume() }
             )
         }
 }

@@ -335,7 +335,13 @@ fun LauncherApp(
             }
         }
     val latestDrop by rememberUpdatedState(onAppDrop)
-    val drag = remember { AppDragController(onDragStart = { appMenu = null; folderMenu = null }) { item, target -> latestDrop(item, target) } }
+    val startAppDrag by rememberUpdatedState<() -> Unit> {
+        appMenu = null
+        folderMenu = null
+        keyboard?.hide()
+        if (manager.current == Screen.APPS || manager.current == Screen.SEARCH) navigate(Screen.HOME)
+    }
+    val drag = remember { AppDragController(onDragStart = { startAppDrag() }) { item, target -> latestDrop(item, target) } }
     var previousPanel by remember { mutableStateOf(panel) }
     LaunchedEffect(panel) {
         if (drag.active == null) drag.cancel()
@@ -494,7 +500,7 @@ fun LauncherApp(
 
         MaterialTheme(colorScheme = workspaceScheme) {
         CompositionLocalProvider(LocalContentColor provides foreground, LocalAppDrag provides drag) {
-            Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().appDragInput(drag)) {
                 if (launcherSurface != SurfaceTheme.GLASS && panel != "screens" && panel != "layout") Box(Modifier.fillMaxSize().background(surfaceColor(launcherSurface, MaterialTheme.colorScheme.primary)))
                 val appearance = state.prefs.appearance
                 val dimColor = when (appearance.dimMode) {
@@ -906,18 +912,7 @@ internal fun FloatingDock(
     }
     val hidden = if (scrolling && prefs.showWhenScrolling) false else idleHidden || (scrolling && prefs.hideOnScroll)
     val isRight = prefs.side == "Right"
-    val entries = state.dockApps.mapNotNull { key -> apps.find { it.key == key } }
-    val drag = LocalAppDrag.current
-    val target = drag?.hovered?.target as? AppDropTarget.Area
-    val hovering = !prefs.preventChanges && target?.area == LayoutArea.DOCK && drag?.active?.movingFolderId == null
-    val movingKey = drag?.active?.app?.key
-    val from = entries.indexOfFirst { it.key == movingKey }
-    val to = entries.indexOfFirst { it.key == target?.atKey }.let { if (it < 0) entries.size else it }
-    val preview = if (hovering && from >= 0) entries.moveLayoutItem(from, to.coerceAtMost(entries.lastIndex)) else entries
-    val gap = hovering && from < 0
     val dockScroll = rememberScrollState()
-    val scrollOffset = with(androidx.compose.ui.platform.LocalDensity.current) { dockScroll.value.toDp() }
-    val folders = state.dockFolders.mapNotNull { id -> state.folders.find { it.id == id } }
     val dockWidth = (56 * prefs.iconScale + 12).dp.coerceAtLeast(56.dp)
     val theme = state.prefs.appearance.dock
     val shape = if (isRight) RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp)
@@ -929,11 +924,10 @@ internal fun FloatingDock(
                 interaction++
             } }
         }
-        .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1)) {
-        val positionedDock = state.positions.any { it.container == "dock" }
+        .then(if (!prefs.preventChanges) Modifier.appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1) else Modifier)) {
         val dockKeys = state.workspaceKeys("dock")
         val dockRows = state.workspacePositions("dock", 1, MAX_LAYOUT_APPS).associate { it.key to it.row }
-        val totalItems = (if (positionedDock) dockKeys.size else entries.size + folders.size) + (if (prefs.allApps) 1 else 0) + (if (gap) 1 else 0)
+        val totalItems = (dockRows.values.maxOrNull()?.plus(1) ?: 0) + (if (prefs.allApps) 1 else 0)
         val itemHeight = (56 * prefs.iconScale + if (prefs.labels) 36 else 16).dp
         val estimatedHeight = (totalItems.coerceIn(1, prefs.maxItems) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
         val height = if (prefs.fullWidth) maxHeight else estimatedHeight
@@ -957,44 +951,19 @@ internal fun FloatingDock(
                     }
                 }
                 if (prefs.allApps && prefs.allAppsLeft) allAppsButton()
-                if (positionedDock) {
-                    var nextDockRow = 0
-                    dockKeys.forEach { itemKey ->
-                        val row = dockRows[itemKey] ?: nextDockRow
-                        repeat((row - nextDockRow).coerceAtLeast(0)) { Spacer(Modifier.height(itemHeight)) }
-                        key(itemKey) { WorkspaceEntry(itemKey, "dock", state, apps, repository, grid, badges, actions,
-                            Modifier.fillMaxWidth().height(itemHeight)) }
-                        nextDockRow = row + 1
-                    }
-                } else {
-                preview.forEachIndexed { index, app ->
-                    if (gap && index == to) Spacer(Modifier.height(itemHeight))
-                    key(app.key) {
-                        AppTile(app, repository, state, grid, badges[app.badgeKey] ?: 0,
-                            { actions.launch(app) }, { actions.dockMenu(app) }, Modifier.fillMaxWidth().height(itemHeight),
-                            draggable = !prefs.preventChanges, dragArea = LayoutArea.DOCK)
-                    }
-                }
-                if (gap && to == entries.size) Spacer(Modifier.height(itemHeight))
-                folders.forEach { item ->
-                    FolderTile(item, apps, repository, state, grid, { actions.folder(item, true) },
-                        { actions.folderActions(item) }, Modifier.fillMaxWidth(), "dock")
-                }
+                var nextDockRow = 0
+                dockKeys.forEach { itemKey ->
+                    val row = dockRows[itemKey] ?: nextDockRow
+                    repeat((row - nextDockRow).coerceAtLeast(0)) { Spacer(Modifier.height(itemHeight)) }
+                    key(itemKey) { WorkspaceEntry(itemKey, "dock", state, apps, repository, grid, badges, actions,
+                        Modifier.fillMaxWidth().height(itemHeight)) }
+                    nextDockRow = row + 1
                 }
                 if (prefs.allApps && !prefs.allAppsLeft) allAppsButton()
                 if (totalItems == 0) IconButton(onClick = { actions.navigate(Screen.APPS) }) {
                     Icon(Icons.Rounded.Add, "Add apps to dock")
                 }
             }
-            }
-        }
-        // Stable hit regions prevent the preview gap from moving its own drop target.
-        if (drag?.active != null && !prefs.preventChanges && !positionedDock) {
-            entries.forEachIndexed { index, app ->
-                Box(Modifier.offset(y = top + prefs.padding.dp + itemHeight * index - scrollOffset +
-                    (if (prefs.allApps && prefs.allAppsLeft) (56 * prefs.iconScale + 16).dp else 0.dp))
-                    .width(dockWidth).height(itemHeight)
-                    .appDropTarget(AppDropTarget.Area(LayoutArea.DOCK, app.key), 2))
             }
         }
     }

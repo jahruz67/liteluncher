@@ -93,16 +93,11 @@ fun SearchScreen(
     permissionSignal: Int, query: String, onQuery: (String) -> Unit, onVoice: () -> Unit, actions: WorkspaceActions
 ) {
     val prefs = state.prefs.search
-    val drag = LocalAppDrag.current
     val context = LocalContext.current
     val clipboard = context.getSystemService(ClipboardManager::class.java)
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
     val search = query.trim()
-
-    LaunchedEffect(drag?.active) {
-        if (drag?.active != null) actions.navigate(Screen.HOME)
-    }
 
     val matchingApps = remember(apps, search, prefs.apps, prefs.hiddenApps, state.hiddenApps, state.overrides) {
         if (search.isBlank()) emptyList() else apps.filter {
