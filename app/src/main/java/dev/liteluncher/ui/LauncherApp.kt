@@ -40,7 +40,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -961,7 +960,7 @@ internal fun FloatingDock(
         val totalItems = (dockRows.values.maxOrNull()?.plus(1) ?: 0) + (if (prefs.allApps) 1 else 0)
         val itemHeight = (56 * prefs.iconScale + if (prefs.labels) 36 else 16).dp
         val estimatedHeight = (totalItems.coerceIn(1, prefs.maxItems) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
-        val height = if (prefs.fullWidth) maxHeight else (estimatedHeight + 24.dp * hoverProgress).coerceAtMost(maxHeight)
+        val height = if (prefs.fullWidth) maxHeight else (estimatedHeight + 48.dp * hoverProgress).coerceAtMost(maxHeight)
         val top = ((maxHeight - height) * prefs.alignment).coerceAtLeast(0.dp)
         CompositionLocalProvider(LocalContentColor provides surfaceContent(theme)) {
             if (hidden) {
@@ -971,10 +970,6 @@ internal fun FloatingDock(
             } else {
             Column(
                 Modifier.offset(y = top).width(dockWidth).height(height)
-                    .graphicsLayer {
-                        scaleX = 1f + .16f * hoverProgress
-                        transformOrigin = TransformOrigin(if (isRight) 1f else 0f, .5f)
-                    }
                     .clip(shape)
                     .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
                     .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .7f * hoverProgress), shape)

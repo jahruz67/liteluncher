@@ -463,7 +463,6 @@ private fun EditableFolderName(
     modifier: Modifier = Modifier, fontSize: TextUnit = 20.sp, color: Color = LocalContentColor.current
 ) {
     var name by rememberSaveable(folder.id) { mutableStateOf(folder.name) }
-    var lastSavedName by rememberSaveable(folder.id) { mutableStateOf(folder.name) }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     BasicTextField(
@@ -471,13 +470,10 @@ private fun EditableFolderName(
         onValueChange = { value ->
             name = value.take(128)
             val savedName = name.trim()
-            if (savedName.isNotEmpty()) {
-                lastSavedName = savedName
-                actions.update { current ->
-                    if (current.folderLocked(folder.id)) current else current.copy(folders = current.folders.map {
-                        if (it.id == folder.id) it.copy(name = savedName) else it
-                    })
-                }
+            actions.update { current ->
+                if (current.folderLocked(folder.id)) current else current.copy(folders = current.folders.map {
+                    if (it.id == folder.id) it.copy(name = savedName) else it
+                })
             }
         },
         enabled = !state.folderLocked(folder.id),
@@ -487,7 +483,7 @@ private fun EditableFolderName(
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { focus.clearFocus(); keyboard?.hide() }),
         modifier = modifier.fillMaxWidth().onFocusChanged {
-            if (!it.isFocused) name = name.trim().ifBlank { lastSavedName }
+            if (!it.isFocused) name = name.trim()
         }.padding(vertical = 8.dp).semantics { contentDescription = "Folder name" }
     )
 }
@@ -540,6 +536,6 @@ internal fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (Fol
                 }
             }
         }
-    }, confirmButton = { TextButton(onClick = { onSave(folder.copy(name = name.trim(), apps = selected.distinct())) }, enabled = name.isNotBlank()) { Text("Save folder") } },
+    }, confirmButton = { TextButton(onClick = { onSave(folder.copy(name = name.trim(), apps = selected.distinct())) }) { Text("Save folder") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
