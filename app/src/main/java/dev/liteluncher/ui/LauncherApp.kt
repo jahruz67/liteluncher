@@ -785,7 +785,7 @@ fun LauncherApp(
                                 }
                             } else renderPage(screen)
                         }
-                        AnimatedVisibility(
+                        androidx.compose.animation.AnimatedVisibility(
                             visible = searching,
                             enter = if (state.prefs.behavior.animations) fadeIn(tween(160)) else EnterTransition.None,
                             exit = if (state.prefs.behavior.animations && drag.active == null) fadeOut(tween(160)) else ExitTransition.None
