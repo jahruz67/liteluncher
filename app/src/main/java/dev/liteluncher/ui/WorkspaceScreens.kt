@@ -31,6 +31,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -372,8 +373,10 @@ fun AppDrawer(
         positions[nearest]?.let { target -> scope.launch { grid.scrollToItem(target) } }
     }
     val showSearchBar = Screen.APPS in state.prefs.search.barScreens
+    var searchBarHeight by remember { mutableStateOf(0.dp) }
     val searchField = @Composable {
-        Box(Modifier.padding(end = 10.dp, top = 8.dp, bottom = 8.dp)) {
+        Box(Modifier.onSizeChanged { searchBarHeight = with(density) { it.height.toDp() } }
+            .padding(end = 10.dp, top = 8.dp, bottom = 8.dp)) {
             LauncherSearchField(filter, { filter = it }, state.prefs.search.barText, {
                 rows.filterIsInstance<DrawerRow.App>().firstOrNull()?.app?.let(actions.launch)
             },
@@ -381,16 +384,17 @@ fun AppDrawer(
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(start = prefs.borderPaddingDp.dp, end = 2.dp)) {
+    Box(Modifier.fillMaxSize().padding(start = prefs.borderPaddingDp.dp, end = 2.dp)) {
+    Column(Modifier.fillMaxSize().padding(end = 28.dp).imePadding()) {
         if (showSearchBar && !state.prefs.search.barAtBottom) searchField()
         if (rows.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
         }
-        else Row(Modifier.weight(1f)) {
+        else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
                 state = grid,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp),
                 verticalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp)
             ) {
@@ -407,9 +411,15 @@ fun AppDrawer(
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(20.dp)) }
             }
+        }
+        if (showSearchBar && state.prefs.search.barAtBottom) searchField()
+    }
 
-            // Condensed vertical A-Z scrub rail (~9sp font) along far right edge
-            Box(Modifier.width(28.dp).fillMaxHeight()) {
+            // Keep the rail outside IME padding so its letters stay in fixed positions.
+            Box(Modifier.align(Alignment.CenterEnd).width(28.dp).fillMaxHeight().padding(
+                top = if (showSearchBar && !state.prefs.search.barAtBottom) searchBarHeight else 0.dp,
+                bottom = if (showSearchBar && state.prefs.search.barAtBottom) searchBarHeight else 0.dp
+            )) {
             Column(
                 Modifier.width(24.dp).fillMaxHeight().padding(vertical = 4.dp).pointerInput(positions) {
                     detectDragGestures(onDragStart = { point ->
@@ -450,8 +460,6 @@ fun AppDrawer(
                 }
             }
             }
-        }
-        if (showSearchBar && state.prefs.search.barAtBottom) searchField()
     }
 }
 

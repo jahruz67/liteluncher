@@ -11,11 +11,13 @@ import android.os.UserManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
 import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -38,8 +40,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
@@ -338,6 +342,7 @@ fun LauncherApp(
     val startAppDrag by rememberUpdatedState<() -> Unit> {
         appMenu = null
         folderMenu = null
+        focusManager.clearFocus(force = true)
         keyboard?.hide()
         if (manager.current == Screen.APPS || manager.current == Screen.SEARCH) navigate(Screen.HOME)
     }
@@ -547,10 +552,10 @@ fun LauncherApp(
                         completedNavigation = null
                         if (!horizontalPaging) return@LaunchedEffect
                         try {
-                            val target = horizontalScreens.indexOf(manager.current)
+                            val target = horizontalScreens.indexOf(if (manager.current == Screen.SEARCH) Screen.HOME else manager.current)
                             if (target >= 0 && (pager.isScrollInProgress || pager.currentPage != target || pager.currentPageOffsetFraction != 0f)) {
                                 pager.stopScroll(MutatePriority.PreventUserInput)
-                                if (state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide") pager.animateScrollToPage(target)
+                                if (manager.current != Screen.SEARCH && drag.active == null && state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide") pager.animateScrollToPage(target)
                                 else pager.scrollToPage(target)
                             }
                         } finally {
@@ -612,7 +617,7 @@ fun LauncherApp(
                         ) }
                     )
 
-                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).then(gestureModifier)) {
+                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)).then(gestureModifier)) {
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
                             // Clip each workspace page while it moves through the pager.
                             Box(Modifier.fillMaxSize().graphicsLayer { clip = true }
@@ -735,13 +740,18 @@ fun LauncherApp(
                             }
                         }
 
+                        val searching = manager.current == Screen.SEARCH
+                        val workspaceScreen = if (searching) Screen.HOME else manager.current
+                        Box(Modifier.weight(1f)) {
+                        // Keep the workspace composed while search is open, ready for a held icon.
                         AnimatedContent(
-                            targetState = if (horizontalPaging && manager.current in horizontalScreens) Screen.HOME else manager.current,
-                            modifier = Modifier.weight(1f),
+                            targetState = if (horizontalPaging && workspaceScreen in horizontalScreens) Screen.HOME else workspaceScreen,
+                            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (searching) 0f else 1f }
+                                .then(if (searching) Modifier.clearAndSetSemantics {} else Modifier),
                             transitionSpec = {
                                 val horizontal = initialState.y == 0 && targetState.y == 0
                                 val transition = if (horizontal) state.prefs.behavior.horizontalTransition else state.prefs.behavior.verticalTransition
-                                if (!state.prefs.behavior.animations || transition == "None") {
+                                if (drag.active != null || !state.prefs.behavior.animations || transition == "None") {
                                     EnterTransition.None togetherWith ExitTransition.None
                                 } else if (transition == "Slide") {
                                     val sign = if (targetState.y > initialState.y) 1 else -1
@@ -774,6 +784,16 @@ fun LauncherApp(
                                     }
                                 }
                             } else renderPage(screen)
+                        }
+                        AnimatedVisibility(
+                            visible = searching,
+                            enter = if (state.prefs.behavior.animations) fadeIn(tween(160)) else EnterTransition.None,
+                            exit = if (state.prefs.behavior.animations && drag.active == null) fadeOut(tween(160)) else ExitTransition.None
+                        ) {
+                            Box(Modifier.fillMaxSize().clickable(
+                                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {}
+                            )) { renderPage(Screen.SEARCH) }
+                        }
                         }
 
                         if (state.prefs.behavior.pageIndicators && manager.current in listOf(Screen.DESKTOP, Screen.HOME, Screen.APPS)) {
@@ -902,7 +922,18 @@ internal fun FloatingDock(
     var interaction by remember { mutableIntStateOf(0) }
     var touching by remember { mutableStateOf(false) }
     val accessibility = LocalAccessibilityManager.current
-    val dragging = LocalAppDrag.current?.active != null
+    val drag = LocalAppDrag.current
+    val dragging = drag?.active != null
+    val hovering = dragging && !prefs.preventChanges && when (val target = drag?.hovered?.target) {
+        is AppDropTarget.Area -> target.area == LayoutArea.DOCK
+        is AppDropTarget.Folder -> target.id in state.dockFolders && drag?.active?.movingFolderId == null
+        else -> false
+    }
+    val hoverProgress by animateFloatAsState(
+        targetValue = if (hovering) 1f else 0f,
+        animationSpec = tween(if (state.prefs.behavior.animations) 180 else 0),
+        label = "Dock drop expansion"
+    )
     LaunchedEffect(prefs.autoHide, interaction, scrolling, dragging, touching) {
         idleHidden = false
         if (prefs.autoHide && !scrolling && !dragging && !touching) {
@@ -930,7 +961,7 @@ internal fun FloatingDock(
         val totalItems = (dockRows.values.maxOrNull()?.plus(1) ?: 0) + (if (prefs.allApps) 1 else 0)
         val itemHeight = (56 * prefs.iconScale + if (prefs.labels) 36 else 16).dp
         val estimatedHeight = (totalItems.coerceIn(1, prefs.maxItems) * (56 * prefs.iconScale + if (prefs.labels) 36 else 16) + prefs.padding * 2).dp.coerceAtMost(maxHeight)
-        val height = if (prefs.fullWidth) maxHeight else estimatedHeight
+        val height = if (prefs.fullWidth) maxHeight else (estimatedHeight + 24.dp * hoverProgress).coerceAtMost(maxHeight)
         val top = ((maxHeight - height) * prefs.alignment).coerceAtLeast(0.dp)
         CompositionLocalProvider(LocalContentColor provides surfaceContent(theme)) {
             if (hidden) {
@@ -939,8 +970,14 @@ internal fun FloatingDock(
                 }
             } else {
             Column(
-                Modifier.offset(y = top).width(dockWidth).height(height).clip(shape)
+                Modifier.offset(y = top).width(dockWidth).height(height)
+                    .graphicsLayer {
+                        scaleX = 1f + .16f * hoverProgress
+                        transformOrigin = TransformOrigin(if (isRight) 1f else 0f, .5f)
+                    }
+                    .clip(shape)
                     .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .7f * hoverProgress), shape)
                     .verticalScroll(dockScroll).padding(vertical = prefs.padding.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {

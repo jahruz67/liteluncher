@@ -20,6 +20,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.filled.Close
@@ -39,7 +42,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.Layout
@@ -47,9 +52,15 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
@@ -95,7 +106,7 @@ fun AppContextMenu(
             color = MenuBackground,
             contentColor = MenuText,
             shadowElevation = 8.dp,
-            modifier = Modifier.width(224.dp).heightIn(max = 360.dp)
+            modifier = Modifier.width(208.dp).heightIn(max = 360.dp)
         ) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 ActionRowItem("Edit", Icons.Default.Edit, onEdit)
@@ -145,7 +156,7 @@ fun AppContextMenu(
                         fontSize = 10.sp,
                         letterSpacing = 1.sp,
                         color = Color.Gray,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)
                     )
                     Column {
                         shortcuts.forEach { shortcut ->
@@ -153,12 +164,12 @@ fun AppContextMenu(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { actions.shortcut(shortcut); onDismiss() }
-                                    .padding(horizontal = 16.dp, vertical = 9.dp),
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.AutoMirrored.Rounded.Shortcut, null, tint = MenuIcon, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(12.dp))
-                                Text(shortcut.label, fontSize = 16.sp, color = MenuText, maxLines = 1, modifier = Modifier.weight(1f))
+                                Icon(Icons.AutoMirrored.Rounded.Shortcut, null, tint = MenuIcon, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text(shortcut.label, fontSize = 14.sp, color = MenuText, maxLines = 1, modifier = Modifier.weight(1f))
                                 IconButton(
                                     onClick = {
                                         val serial = requireNotNull(context.getSystemService(UserManager::class.java)).getSerialNumberForUser(shortcut.user)
@@ -250,7 +261,7 @@ fun EmptySpaceMenuDialog(
             color = MenuBackground,
             contentColor = MenuText,
             shadowElevation = 8.dp,
-            modifier = Modifier.width(280.dp)
+            modifier = Modifier.width(248.dp)
         ) {
             Column {
                 ActionRowItem("Change Wallpaper", Icons.Default.Wallpaper, onWallpaper)
@@ -267,14 +278,14 @@ private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vect
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = if (compact) 40.dp else 48.dp)
+            .heightIn(min = if (compact) 36.dp else 40.dp)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(if (compact) 24.dp else 28.dp))
-        Spacer(Modifier.width(22.dp))
-        Text(label, fontSize = if (compact) 16.sp else 20.sp, fontWeight = FontWeight.Normal, color = MenuText)
+        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(if (compact) 20.dp else 22.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(label, fontSize = if (compact) 14.sp else 16.sp, fontWeight = FontWeight.Normal, color = MenuText)
     }
 }
 
@@ -363,19 +374,14 @@ fun FolderOverlay(
     val folderContent = contrastContent(folderColor)
 
     // Keep the source composed until release so its pointer handler continues the drag.
-    Box(Modifier.fillMaxSize().alpha(if (draggingOutside) 0f else 1f).background(ColorForOverlay).clickable(onClick = onDismiss)) {
+    Box(Modifier.fillMaxSize().alpha(if (draggingOutside) 0f else 1f).background(ColorForOverlay).imePadding().clickable(onClick = onDismiss)) {
         if (!stack) {
             val keys = state.workspaceKeys("folder:${folder.id}")
-            Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp)
+            Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 360.dp)
                 .onGloballyPositioned { bounds = it.boundsInRoot() }.appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
                 color = background, contentColor = folderContent, shape = RoundedCornerShape(28.dp)) {
-                Column(Modifier.padding(18.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(folder.name, Modifier.weight(1f), fontSize = 22.sp)
-                        IconButton(onClick = { onDismiss(); actions.editFolder(folder) }, enabled = !state.folderLocked(folder.id)) {
-                            Icon(Icons.Rounded.Edit, "Edit folder")
-                        }
-                    }
+                Column(Modifier.padding(14.dp)) {
+                    EditableFolderName(folder, state, actions)
                     LazyColumn(Modifier.heightIn(max = 410.dp)) {
                         items(keys.chunked(3)) { row ->
                             Row(Modifier.fillMaxWidth()) {
@@ -405,7 +411,7 @@ fun FolderOverlay(
                     color = Color(0xCC000000),
                     modifier = Modifier.padding(bottom = 4.dp)
                 ) {
-                    Text(folder.name, fontSize = 12.sp, color = Mist, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                    EditableFolderName(folder, state, actions, Modifier.padding(horizontal = 12.dp), 12.sp, Mist)
                 }
                 val keys = state.workspaceKeys("folder:${folder.id}")
                 keys.forEachIndexed { index, entryKey ->
@@ -425,20 +431,15 @@ fun FolderOverlay(
             }
         } else {
             Surface(
-                Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 380.dp)
+                Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 360.dp)
                     .onGloballyPositioned { bounds = it.boundsInRoot() }.appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
                 color = background,
                 contentColor = folderContent,
                 shape = RoundedCornerShape(28.dp),
                 border = BorderStroke(1.dp, Color(0x22FFFFFF))
             ) {
-                Column(Modifier.padding(22.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(folder.name, modifier = Modifier.weight(1f), fontSize = 22.sp, color = folderContent)
-                        IconButton(onClick = { onDismiss(); actions.editFolder(folder) }, enabled = !state.folderLocked(folder.id)) {
-                            Icon(Icons.Rounded.Edit, "Edit folder", tint = Muted, modifier = Modifier.size(18.dp))
-                        }
-                    }
+                Column(Modifier.padding(14.dp)) {
+                    EditableFolderName(folder, state, actions, color = folderContent)
                     LazyColumn(Modifier.heightIn(max = 410.dp)) {
                         items(members.chunked(3)) { row ->
                             Row(Modifier.fillMaxWidth()) {
@@ -457,10 +458,45 @@ fun FolderOverlay(
 }
 
 @Composable
+private fun EditableFolderName(
+    folder: FolderItem, state: LauncherState, actions: WorkspaceActions,
+    modifier: Modifier = Modifier, fontSize: TextUnit = 20.sp, color: Color = LocalContentColor.current
+) {
+    var name by rememberSaveable(folder.id) { mutableStateOf(folder.name) }
+    var lastSavedName by rememberSaveable(folder.id) { mutableStateOf(folder.name) }
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    BasicTextField(
+        value = name,
+        onValueChange = { value ->
+            name = value.take(128)
+            val savedName = name.trim()
+            if (savedName.isNotEmpty()) {
+                lastSavedName = savedName
+                actions.update { current ->
+                    if (current.folderLocked(folder.id)) current else current.copy(folders = current.folders.map {
+                        if (it.id == folder.id) it.copy(name = savedName) else it
+                    })
+                }
+            }
+        },
+        enabled = !state.folderLocked(folder.id),
+        singleLine = true,
+        textStyle = LocalTextStyle.current.copy(fontSize = fontSize, color = color),
+        cursorBrush = SolidColor(color),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { focus.clearFocus(); keyboard?.hide() }),
+        modifier = modifier.fillMaxWidth().onFocusChanged {
+            if (!it.isFocused) name = name.trim().ifBlank { lastSavedName }
+        }.padding(vertical = 8.dp).semantics { contentDescription = "Folder name" }
+    )
+}
+
+@Composable
 internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean, onEdit: () -> Unit, onDismiss: () -> Unit, onRemove: () -> Unit = {}) {
     AnchoredIconMenu(anchor, onDismiss) {
-        Surface(shape = RoundedCornerShape(10.dp), color = MenuBackground, shadowElevation = 8.dp, modifier = Modifier.width(224.dp)) {
-            Column(Modifier.padding(12.dp)) {
+        Surface(shape = RoundedCornerShape(10.dp), color = MenuBackground, shadowElevation = 8.dp, modifier = Modifier.width(208.dp)) {
+            Column(Modifier.padding(10.dp)) {
                 Text(folder.name, color = Color.White)
                 if (!locked) ActionRowItem("Edit folder", Icons.Rounded.Edit, onEdit)
                 if (!locked) ActionRowItem("Delete folder", Icons.Rounded.DeleteOutline, onRemove)
