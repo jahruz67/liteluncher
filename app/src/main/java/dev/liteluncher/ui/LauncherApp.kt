@@ -564,6 +564,14 @@ fun LauncherApp(
                     var completedNavigation by remember { mutableStateOf<Pair<Long, List<Screen>>?>(null) }
                     var workspacePointerCount by remember { mutableIntStateOf(0) }
                     var pagerHandledGesture by remember { mutableStateOf(false) }
+                    var pageIndicatorsVisible by remember { mutableStateOf(true) }
+                    LaunchedEffect(pager.isScrollInProgress, navigationRevision, manager.current) {
+                        pageIndicatorsVisible = true
+                        if (!pager.isScrollInProgress) {
+                            delay(500)
+                            pageIndicatorsVisible = false
+                        }
+                    }
                     LaunchedEffect(navigationRevision, horizontalScreens, horizontalPaging) {
                         completedNavigation = null
                         if (!horizontalPaging) return@LaunchedEffect
@@ -634,10 +642,11 @@ fun LauncherApp(
                         ) }
                     )
 
-                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)).then(gestureModifier)) {
+                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout)).then(gestureModifier)) {
                         val renderPage: @Composable (Screen) -> Unit = { screen ->
                             // Clip each workspace page while it moves through the pager.
                             Box(Modifier.fillMaxSize().graphicsLayer { clip = true }
+                                .then(if (screen == Screen.SEARCH || screen == Screen.FAVORITES) Modifier.navigationBarsPadding() else Modifier)
                                 .then(if (state.prefs.behavior.borders && (pager.isScrollInProgress || screen != manager.current)) Modifier.border(1.dp, MaterialTheme.colorScheme.outline) else Modifier)) {
                                 when (screen) {
                                     Screen.HOME -> HomeScreen(
@@ -745,7 +754,7 @@ fun LauncherApp(
                                                 containerColor = MaterialTheme.colorScheme.primary,
                                                 contentColor = Ink,
                                                 shape = RoundedCornerShape(24.dp),
-                                                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
+                                                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 20.dp)
                                             ) {
                                                 Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                                                 Spacer(Modifier.width(8.dp))
@@ -759,7 +768,7 @@ fun LauncherApp(
 
                         val searching = manager.current == Screen.SEARCH
                         val workspaceScreen = if (searching) Screen.HOME else manager.current
-                        Box(Modifier.weight(1f)) {
+                        Box(Modifier.fillMaxSize()) {
                         // Keep the workspace composed while search is open, ready for a held icon.
                         AnimatedContent(
                             targetState = if (horizontalPaging && workspaceScreen in horizontalScreens) Screen.HOME else workspaceScreen,
@@ -813,18 +822,20 @@ fun LauncherApp(
                         }
                         }
 
-                        if (state.prefs.behavior.pageIndicators && manager.current in listOf(Screen.DESKTOP, Screen.HOME, Screen.APPS)) {
-                            val currentIdx = horizontalScreens.indexOf(manager.current).coerceAtLeast(0)
-                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                PageIndicators(
-                                    pageCount = horizontalScreens.size,
-                                    currentPage = currentIdx,
-                                    onSelectPage = { idx -> navigate(horizontalScreens[idx]) }
-                                )
-                            }
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = state.prefs.behavior.pageIndicators && horizontalScreens.size > 1 &&
+                                manager.current in horizontalScreens && pageIndicatorsVisible,
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                                .windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 8.dp),
+                            enter = if (state.prefs.behavior.animations) fadeIn(tween(100)) else EnterTransition.None,
+                            exit = if (state.prefs.behavior.animations) fadeOut(tween(1000)) else ExitTransition.None
+                        ) {
+                            PageIndicators(
+                                pageCount = horizontalScreens.size,
+                                currentPage = if (horizontalPaging) pager.currentPage else horizontalScreens.indexOf(manager.current).coerceAtLeast(0),
+                                onSelectPage = { idx -> navigate(horizontalScreens[idx]) }
+                            )
                         }
-
-                        Spacer(Modifier.height(8.dp))
                     }
 
                 }

@@ -200,7 +200,7 @@ fun HomeScreen(
                 theme = state.prefs.appearance.search,
                 onActivate = { actions.navigate(Screen.SEARCH) }
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.navigationBarsPadding().height(8.dp))
         } else {
             Spacer(Modifier.height(8.dp))
         }
@@ -392,7 +392,8 @@ fun AppDrawer(
     val showSearchBar = Screen.APPS in state.prefs.search.barScreens
     var searchBarHeight by remember { mutableStateOf(0.dp) }
     val searchField = @Composable {
-        Box(Modifier.onSizeChanged { searchBarHeight = with(density) { it.height.toDp() } }
+        Box(Modifier.then(if (state.prefs.search.barAtBottom) Modifier.navigationBarsPadding() else Modifier)
+            .onSizeChanged { searchBarHeight = with(density) { it.height.toDp() } }
             .padding(end = 10.dp, top = 8.dp, bottom = 8.dp)) {
             LauncherSearchField(filter, { filter = it }, state.prefs.search.barText, {
                 rows.filterIsInstance<DrawerRow.App>().firstOrNull()?.app?.let(actions.launch)
@@ -412,6 +413,8 @@ fun AppDrawer(
                 columns = GridCells.Fixed(if (prefs.listMode) 1 else prefs.columns),
                 state = grid,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = if (showSearchBar && state.prefs.search.barAtBottom) PaddingValues(0.dp)
+                    else WindowInsets.navigationBars.only(WindowInsetsSides.Bottom).asPaddingValues(),
                 horizontalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp),
                 verticalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp)
             ) {
@@ -434,7 +437,8 @@ fun AppDrawer(
     }
 
             // Keep the rail outside IME padding so its letters stay in fixed positions.
-            Box(Modifier.align(Alignment.CenterEnd).width(28.dp).fillMaxHeight().padding(
+            Box(Modifier.align(Alignment.CenterEnd).width(28.dp).fillMaxHeight()
+                .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)).padding(
                 top = if (showSearchBar && !state.prefs.search.barAtBottom) searchBarHeight else 0.dp,
                 bottom = if (showSearchBar && state.prefs.search.barAtBottom) searchBarHeight else 0.dp
             )) {
