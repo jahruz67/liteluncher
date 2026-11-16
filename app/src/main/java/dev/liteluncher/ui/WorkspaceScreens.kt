@@ -58,7 +58,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.Collator
@@ -343,6 +345,10 @@ private sealed interface DrawerRow {
     data class App(val app: AppEntry) : DrawerRow
 }
 
+private data class DrawerContent(
+    val query: String, val rows: List<DrawerRow>, val positions: Map<String, Int>, val firstApp: AppEntry?
+)
+
 @Composable
 fun AppDrawer(
     state: LauncherState,
@@ -369,25 +375,44 @@ fun AppDrawer(
                 .sortedWith { a, b -> collator.compare(state.overrides[a.key]?.label?.ifBlank { a.label } ?: a.label, state.overrides[b.key]?.label?.ifBlank { b.label } ?: b.label) }
         }
     }
-    val sortedApps = drawerApps.value.orEmpty()
-    val rows = remember(sortedApps, state.overrides, activeFilter) {
-        val grouped = sortedApps.filter {
-            (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(activeFilter, true)
-        }.groupBy { app ->
-            val first = (state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label).firstOrNull()?.uppercaseChar()
-            when {
-                first == null -> "#"
-                first in 'A'..'Z' -> first.toString()
-                first.isDigit() -> "1"
-                else -> "#"
-            }
-        }.toSortedMap(compareBy { if (it == "#") "00" else if (it == "1") "01" else it })
-        grouped.flatMap { (letter, group) -> listOf(DrawerRow.Header(letter)) + group.map { DrawerRow.App(it) } }
+    val sortedApps = drawerApps.value
+    val drawerContent = remember(sortedApps, state.overrides) {
+        mutableStateOf<DrawerContent?>(null)
     }
+    LaunchedEffect(drawerContent, activeFilter) {
+        if (sortedApps == null) return@LaunchedEffect
+        drawerContent.value = withContext(Dispatchers.Default) {
+            val workContext = currentCoroutineContext()
+            val grouped = sortedApps.filter {
+                workContext.ensureActive()
+                (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(activeFilter, true)
+            }.groupBy { app ->
+                val first = (state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label).firstOrNull()?.uppercaseChar()
+                when {
+                    first == null -> "#"
+                    first in 'A'..'Z' -> first.toString()
+                    first.isDigit() -> "1"
+                    else -> "#"
+                }
+            }.toSortedMap(compareBy { if (it == "#") "00" else if (it == "1") "01" else it })
+            val positions = mutableMapOf<String, Int>()
+            val rows = buildList<DrawerRow> {
+                grouped.forEach { (letter, group) ->
+                    workContext.ensureActive()
+                    positions[letter] = size
+                    add(DrawerRow.Header(letter))
+                    group.forEach { add(DrawerRow.App(it)) }
+                }
+            }
+            DrawerContent(activeFilter, rows, positions, rows.firstNotNullOfOrNull { (it as? DrawerRow.App)?.app })
+        }
+    }
+    val content = drawerContent.value
+    val rows = content?.rows.orEmpty()
     val grid = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val letters = remember { listOf("#", "1") + ('A'..'Z').map { it.toString() } }
-    val positions = remember(rows) { rows.mapIndexedNotNull { i, row -> (row as? DrawerRow.Header)?.let { it.letter to i } }.toMap() }
+    val positions = content?.positions.orEmpty()
     var scrubLetter by remember { mutableStateOf<String?>(null) }
     var scrubY by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
@@ -406,7 +431,7 @@ fun AppDrawer(
             .onSizeChanged { searchBarHeight = with(density) { it.height.toDp() } }
             .padding(end = 10.dp, top = 8.dp, bottom = 8.dp)) {
             LauncherSearchField(filter, { filter = it }, state.prefs.search.barText, {
-                rows.filterIsInstance<DrawerRow.App>().firstOrNull()?.app?.let(actions.launch)
+                content?.takeIf { it.query == filter }?.firstApp?.let(actions.launch)
             },
                 onVoice.takeIf { state.prefs.search.voice }, state.prefs.appearance.search)
         }
@@ -416,7 +441,7 @@ fun AppDrawer(
     Column(Modifier.fillMaxSize().padding(end = 28.dp).imePadding()) {
         if (showSearchBar && !state.prefs.search.barAtBottom) searchField()
         if (rows.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            if (drawerApps.value != null) EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
+            if (content != null) EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
         }
         else {
             LazyVerticalGrid(

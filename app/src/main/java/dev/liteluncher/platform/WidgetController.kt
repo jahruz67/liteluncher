@@ -27,6 +27,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import dev.liteluncher.data.DesktopPrefs
 import dev.liteluncher.data.PinnedShortcut
 import dev.liteluncher.data.WidgetItem
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.abs
@@ -50,7 +52,8 @@ class WidgetController(
     private val providerPaddings = mutableMapOf<ComponentName, Rect>()
     private var paddingConfiguration = Configuration(activity.resources.configuration)
     private var paddingRevision = 0
-    private val nativeHost = LauncherWidgetHost(activity, HOST_ID) {
+    private val nativeHost = LauncherWidgetHost(activity, HOST_ID) { id ->
+        if (id != null) invalidateView(id)
         mutableProviderChanges.value += 1
     }
     val host: AppWidgetHost = nativeHost
@@ -431,7 +434,7 @@ class WidgetController(
         val info = provider(id)
         // Recreate the host view to reload Android's most recent RemoteViews, and ask the
         // provider to refresh its data. Providers may apply their own refresh throttling.
-        mutableRefreshes.value = mutableRefreshes.value + (id to ((mutableRefreshes.value[id] ?: 0) + 1))
+        invalidateView(id)
         if (info == null) {
             val savedProvider = layoutItems.firstOrNull { it.id == id }?.provider
                 ?.let(ComponentName::unflattenFromString)
@@ -456,6 +459,10 @@ class WidgetController(
             activity.sendBroadcast(Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE)
                 .setComponent(info.provider).putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, intArrayOf(id)))
         }.onFailure { SystemActions.error(activity, "Widget view reloaded, but its app refused the refresh request.") }
+    }
+
+    private fun invalidateView(id: Int) {
+        mutableRefreshes.value = mutableRefreshes.value + (id to ((mutableRefreshes.value[id] ?: 0) + 1))
     }
 
     fun deferRemoval(id: Int) {
@@ -693,18 +700,18 @@ class WidgetController(
     }
 }
 
-private class LauncherWidgetHost(context: Context, id: Int, private val onProviderChange: () -> Unit) : AppWidgetHost(context, id) {
+private class LauncherWidgetHost(context: Context, id: Int, private val onProviderChange: (Int?) -> Unit) : AppWidgetHost(context, id) {
     override fun onCreateView(context: Context, appWidgetId: Int, appWidget: AppWidgetProviderInfo): AppWidgetHostView =
         LauncherWidgetHostView(context)
 
     override fun onProviderChanged(appWidgetId: Int, appWidget: AppWidgetProviderInfo) {
         super.onProviderChanged(appWidgetId, appWidget)
-        onProviderChange()
+        onProviderChange(appWidgetId)
     }
 
     override fun onProvidersChanged() {
         super.onProvidersChanged()
-        onProviderChange()
+        onProviderChange(null)
     }
 
     fun releaseViews() = clearViews()
@@ -712,6 +719,8 @@ private class LauncherWidgetHost(context: Context, id: Int, private val onProvid
 
 /** Normal child clicks/scrolling remain native; only a stationary hold enters launcher editing. */
 internal class LauncherWidgetHostView(context: Context) : AppWidgetHostView(context) {
+    init { setExecutor(remoteViewsExecutor) }
+
     var edit: (() -> Unit)? = null
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var down: MotionEvent? = null
@@ -766,5 +775,9 @@ internal class LauncherWidgetHostView(context: Context) : AppWidgetHostView(cont
     override fun onDetachedFromWindow() {
         clearHold()
         super.onDetachedFromWindow()
+    }
+
+    private companion object {
+        val remoteViewsExecutor = Dispatchers.Default.limitedParallelism(2).asExecutor()
     }
 }

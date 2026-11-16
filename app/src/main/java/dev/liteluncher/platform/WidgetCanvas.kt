@@ -134,7 +134,7 @@ fun WidgetCanvas(
                 Box(Modifier.fillMaxSize().clickable { resizingWidgetId = null; draft = null })
             }
             layout.placed.forEach { saved ->
-                key(saved.id, refreshes[saved.id] ?: 0, providerChanges) {
+                key(saved.id, refreshes[saved.id] ?: 0) {
                     val item = draft?.takeIf { it.id == saved.id } ?: saved
                     val isResizing = resizingWidgetId == item.id
                     val itemWidth = (cellWidth * item.columns - gutter * 2).coerceAtLeast(1.dp)
@@ -145,7 +145,7 @@ fun WidgetCanvas(
                     Box(Modifier.offset(cellWidth * item.column + gutter, cellHeight * item.row + gutter)
                         .width(itemWidth).height(itemHeight)) {
                         AndroidView(
-                            factory = { context -> HostedWidgetFrame(context, controller, item.id, onEdit) },
+                            factory = { context -> HostedWidgetFrame(context, controller, item.id, providerChanges, onEdit) },
                             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(radius))
                                 .then(if (isResizing) Modifier.border(BorderStroke(2.dp, ResizeColor), RoundedCornerShape(radius)) else Modifier)
                                 .semantics {
@@ -175,8 +175,11 @@ fun WidgetCanvas(
                                         } }
                                 },
                             onRelease = { it.release() }, onReset = null,
-                            update = { frame -> frame.updateSize(itemWidth.value.roundToInt().coerceAtLeast(1),
-                                itemHeight.value.roundToInt().coerceAtLeast(1), radius.value, onEdit) }
+                            update = { frame ->
+                                frame.reconnect(controller, item.id, providerChanges, onEdit)
+                                frame.updateSize(itemWidth.value.roundToInt().coerceAtLeast(1),
+                                    itemHeight.value.roundToInt().coerceAtLeast(1), radius.value, onEdit)
+                            }
                         )
                         WidgetContextMenu(contextMenuWidget == item.id,
                             !prefs.preventChanges, !prefs.preventChanges,
@@ -313,9 +316,11 @@ private class HostedWidgetFrame(
     context: Context,
     controller: WidgetController,
     id: Int,
+    providerRevision: Int,
     onEdit: () -> Unit
 ) : FrameLayout(context) {
-    private val widget = controller.createView(context, id, onEdit)
+    private var widget = controller.createView(context, id, onEdit)
+    private var lastProviderRevision = providerRevision
     private var lastWidth = 0
     private var lastHeight = 0
     private var cornerRadius = 0f
@@ -341,6 +346,19 @@ private class HostedWidgetFrame(
             }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
             setOnLongClickListener { onEdit(); true }
         }
+    }
+
+    fun reconnect(controller: WidgetController, id: Int, revision: Int, onEdit: () -> Unit) {
+        if (lastProviderRevision == revision) return
+        lastProviderRevision = revision
+        if (widget != null) return
+        val restored = controller.createView(context, id, onEdit) ?: return
+        widget = restored
+        removeAllViews()
+        setOnLongClickListener(null)
+        addView(restored, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        lastWidth = 0
+        lastHeight = 0
     }
 
     fun updateSize(widthDp: Int, heightDp: Int, radiusDp: Float, onEdit: () -> Unit) {

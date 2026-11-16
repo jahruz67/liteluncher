@@ -1,10 +1,13 @@
 package dev.liteluncher.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import dev.liteluncher.data.AppearancePrefs
@@ -21,6 +24,7 @@ fun parseColor(value: String, fallback: Color = Cerulean): Color = runCatching {
     Color(android.graphics.Color.parseColor(value))
 }.getOrDefault(fallback)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LauncherTheme(prefs: AppearancePrefs, content: @Composable () -> Unit) {
     val accent = parseColor(prefs.accent)
@@ -49,10 +53,13 @@ fun LauncherTheme(prefs: AppearancePrefs, content: @Composable () -> Unit) {
             onBackground = Mist, onSurface = Mist, surfaceVariant = Color(0xFF484848), onSurfaceVariant = Muted
         )
     }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content
-    )
+    // Disable press highlights throughout the launcher, including nested themes and dialogs.
+    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            content = content
+        )
+    }
 }
 
 fun surfaceColor(theme: SurfaceTheme, accent: Color): Color = when (theme) {

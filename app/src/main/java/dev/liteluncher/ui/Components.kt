@@ -69,22 +69,24 @@ internal fun badgeCounts(prefs: LauncherPrefs): Boolean = when (prefs.badges.sty
 @Composable
 fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, size: Int = 48, modifier: Modifier = Modifier) {
     val override = state.overrides[app.key]
-    val backupBitmap = rememberBackupBitmap(override?.backupIcon.takeIf { override?.iconUri.isNullOrBlank() }, repository)
     val pack = state.prefs.appearance.iconPack
     val iconRevision by repository.iconRevision.collectAsStateWithLifecycle()
     val uri = override?.iconUri.orEmpty()
-    val cached = if (uri.isBlank()) repository.cachedIconBitmap(app, pack) else repository.imageLoader.cachedCustom(uri)
-    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, uri, pack, iconRevision) {
+    val backup = override?.backupIcon.takeIf { uri.isBlank() }
+    val cachedBackup = backup?.let { repository.imageLoader.cached(it) }
+    val cached = cachedBackup ?: if (uri.isBlank()) repository.cachedIconBitmap(app, pack) else repository.imageLoader.cachedCustom(uri)
+    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, uri, backup, pack, iconRevision) {
         value = cached
-        if (cached != null) return@produceState
+        if (cachedBackup != null || (backup == null && cached != null)) return@produceState
         value = withContext(repository.imageLoader.dispatcher) {
-            repository.imageLoader.custom(uri) ?: repository.iconBitmap(app, pack)
+            backup?.let { repository.imageLoader.backup(it) } ?: cached ?:
+                repository.imageLoader.custom(uri) ?: repository.iconBitmap(app, pack)
         }
     }
     val shape = iconShape(override?.shape ?: state.prefs.appearance.iconShape)
     Box(modifier.size(size.dp).clip(shape)
         .then(if (state.prefs.appearance.forceAdaptive) Modifier.background(MaterialTheme.colorScheme.surface) else Modifier), contentAlignment = Alignment.Center) {
-        val displayed = backupBitmap ?: bitmap
+        val displayed = bitmap
         if (displayed != null) Image(displayed.asImageBitmap(), contentDescription = null,
             modifier = Modifier.fillMaxSize().then(if (state.prefs.appearance.forceAdaptive) Modifier.padding((size * .12f).dp) else Modifier), contentScale = ContentScale.Fit)
         else Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {

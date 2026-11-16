@@ -38,8 +38,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+
+private data class LocalSearchResults(
+    val query: String, val apps: List<AppEntry>, val hiddenApps: List<AppEntry>,
+    val shortcuts: List<NativeShortcut>, val calculation: String?
+)
 
 @Composable
 fun LauncherSearchField(
@@ -98,50 +105,70 @@ fun SearchScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
     val search = query.trim()
+    val latestQuery = remember { mutableStateOf(search) }
+    SideEffect { latestQuery.value = search }
 
     val resultLimit = prefs.grid.rows * prefs.grid.columns
-    val (matches, hiddenMatches) = remember(apps, search, prefs.apps, prefs.hiddenApps, state.hiddenApps, state.overrides, resultLimit) {
-        // Keep prefix matches first without sorting or retaining every match.
-        val visiblePrefixes = ArrayList<AppEntry>()
-        val visibleOthers = ArrayList<AppEntry>()
-        val hiddenPrefixes = ArrayList<AppEntry>()
-        val hiddenOthers = ArrayList<AppEntry>()
-        if (search.isNotBlank() && (prefs.apps || prefs.hiddenApps)) for (app in apps) {
-            val hidden = app.key in state.hiddenApps
-            if (if (hidden) !prefs.hiddenApps else !prefs.apps) continue
-            val prefixes = if (hidden) hiddenPrefixes else visiblePrefixes
-            if (prefixes.size >= resultLimit) continue
-            val label = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label
-            val target = when {
-                label.startsWith(search, true) -> prefixes
-                label.contains(search, true) -> if (hidden) hiddenOthers else visibleOthers
-                else -> continue
-            }
-            if (target.size < resultLimit) target.add(app)
-        }
-        (visiblePrefixes + visibleOthers).take(resultLimit) to (hiddenPrefixes + hiddenOthers).take(resultLimit)
-    }
-    val contacts by produceState<List<ContactEntry>>(emptyList(), search, prefs.contacts, permissionSignal) {
-        value = emptyList()
+    val contactResults by produceState<Pair<String, List<ContactEntry>>?>(null, search, prefs.contacts, permissionSignal) {
+        value = null
         if (prefs.contacts && search.isNotBlank()) {
             delay(150)
-            value = withContext(Dispatchers.IO) { repository.contacts(search, limit = 15) }
+            value = search to withContext(Dispatchers.IO) { repository.contacts(search, limit = 15) }
         }
     }
+    val contacts = contactResults?.takeIf { it.first == search && prefs.contacts }?.second.orEmpty()
     val shortcutRevision by repository.shortcutRevision.collectAsStateWithLifecycle()
     val allShortcuts by produceState<List<NativeShortcut>>(emptyList(), apps, prefs.shortcuts, permissionSignal, shortcutRevision) {
         value = if (prefs.shortcuts) withContext(Dispatchers.IO) {
             repository.shortcuts(apps)
         } else emptyList()
     }
-    val hiddenShortcutApps = remember(apps, state.hiddenApps) {
-        apps.asSequence().filter { it.key in state.hiddenApps }.map { it.packageName to it.user }.toSet()
+    val localResults = remember(apps, allShortcuts, prefs.apps, prefs.hiddenApps, prefs.shortcuts,
+        prefs.math, state.hiddenApps, state.overrides, resultLimit) {
+        mutableStateOf<LocalSearchResults?>(null)
     }
-    val shortcuts = remember(allShortcuts, search, hiddenShortcutApps, prefs.hiddenApps) {
-        if (search.isBlank()) emptyList() else allShortcuts.asSequence().filter { shortcut -> shortcut.label.contains(search, true) &&
-            (prefs.hiddenApps || (shortcut.packageName to shortcut.user) !in hiddenShortcutApps) }.take(12).toList()
+    LaunchedEffect(localResults, search) {
+        localResults.value = withContext(Dispatchers.Default) {
+            val workContext = currentCoroutineContext()
+            // Keep prefix matches first without sorting or retaining every match.
+            val visiblePrefixes = ArrayList<AppEntry>()
+            val visibleOthers = ArrayList<AppEntry>()
+            val hiddenPrefixes = ArrayList<AppEntry>()
+            val hiddenOthers = ArrayList<AppEntry>()
+            if (search.isNotBlank() && (prefs.apps || prefs.hiddenApps)) for (app in apps) {
+                workContext.ensureActive()
+                val hidden = app.key in state.hiddenApps
+                if (if (hidden) !prefs.hiddenApps else !prefs.apps) continue
+                val prefixes = if (hidden) hiddenPrefixes else visiblePrefixes
+                if (prefixes.size >= resultLimit) continue
+                val label = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label
+                val target = when {
+                    label.startsWith(search, true) -> prefixes
+                    label.contains(search, true) -> if (hidden) hiddenOthers else visibleOthers
+                    else -> continue
+                }
+                if (target.size < resultLimit) target.add(app)
+            }
+            val hiddenShortcutApps = if (prefs.shortcuts && !prefs.hiddenApps) apps.asSequence().filter {
+                workContext.ensureActive()
+                it.key in state.hiddenApps
+            }.map { it.packageName to it.user }.toSet() else emptySet()
+            val shortcuts = if (!prefs.shortcuts || search.isBlank()) emptyList() else allShortcuts.asSequence().filter { shortcut ->
+                workContext.ensureActive()
+                shortcut.label.contains(search, true) &&
+                    (prefs.hiddenApps || (shortcut.packageName to shortcut.user) !in hiddenShortcutApps)
+            }.take(12).toList()
+            workContext.ensureActive()
+            val calculation = if (prefs.math && search.isNotBlank()) SearchEngine.calculate(search) else null
+            LocalSearchResults(search, (visiblePrefixes + visibleOthers).take(resultLimit),
+                (hiddenPrefixes + hiddenOthers).take(resultLimit), shortcuts, calculation)
+        }
     }
-    val calculation = remember(search, prefs.math) { if (prefs.math && search.isNotBlank()) SearchEngine.calculate(search) else null }
+    val results = localResults.value
+    val matches = results?.apps.orEmpty()
+    val hiddenMatches = results?.hiddenApps.orEmpty()
+    val shortcuts = results?.shortcuts.orEmpty()
+    val calculation = results?.takeIf { it.query == search }?.calculation
     val settings = if (prefs.settings && search.isNotBlank()) SearchEngine.settingTargets.filter { it.title.contains(search, true) } else emptyList()
 
     val candidateUrl = when {
@@ -163,9 +190,10 @@ fun SearchScreen(
     val searchField = @Composable {
         LauncherSearchField(
             query = query,
-            onQuery = onQuery,
+            onQuery = { latestQuery.value = it.trim(); onQuery(it) },
             placeholder = if (prefs.barText.isNotBlank()) prefs.barText else "Apps, people, calculations…",
-            onSubmit = {
+            onSubmit = submit@{
+                if (results?.query != latestQuery.value) return@submit
                 val target = prefs.targetOrder.firstOrNull { when (it) {
                     SearchTarget.APPS -> matches.isNotEmpty()
                     SearchTarget.HIDDEN_APPS -> hiddenMatches.isNotEmpty()
