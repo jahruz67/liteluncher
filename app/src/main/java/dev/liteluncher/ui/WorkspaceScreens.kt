@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -90,7 +91,11 @@ fun HomeScreen(
     Column(
         Modifier.fillMaxSize()
             .appDropTarget(AppDropTarget.Area(LayoutArea.HOME))
-            .combinedClickable(onClick = {}, onLongClick = onEmpty, onDoubleClick = onDoubleTap)
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}, onLongClick = onEmpty, onDoubleClick = onDoubleTap
+            )
             .padding(horizontal = prefs.borderPaddingDp.dp)
     ) {
         if (showSearchBar && !barAtBottom) {
@@ -247,7 +252,11 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
             // Analog clock rendering
             Box(Modifier.size((110 * prefs.size / 52f * textScale).dp)
                 .semantics { contentDescription = "Time ${now.format(DateTimeFormatter.ofPattern(if (prefs.use24Hour) "HH:mm" else "h:mm a", Locale.getDefault()))}" }
-                .clickable(onClick = onClockClick).align(Alignment.Start), contentAlignment = Alignment.Center) {
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClockClick
+                ).align(Alignment.Start), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxSize()) {
                     val radius = size.minDimension / 2f - 4f
                     val center = Offset(size.width / 2f, size.height / 2f)
@@ -277,7 +286,11 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
         } else {
             Row(
                 verticalAlignment = Alignment.Bottom,
-                modifier = Modifier.clickable(onClick = onClockClick)
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClockClick
+                )
             ) {
                 val timeStr = now.format(DateTimeFormatter.ofPattern(if (prefs.use24Hour) "HH:mm" else "h:mm"))
                 Text(
@@ -311,7 +324,11 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                     fontSize = (16 * textScale).sp,
                     fontFamily = font,
                     style = TextStyle(shadow = clockShadow),
-                    modifier = Modifier.clickable { onClockClick() }
+                    modifier = Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onClockClick
+                    )
                 )
             }
     }
@@ -399,6 +416,7 @@ fun AppDrawer(
                 verticalArrangement = Arrangement.spacedBy((prefs.spacing / 2).dp)
             ) {
                 items(rows.size, key = { index -> when (val row = rows[index]) { is DrawerRow.Header -> "header:${row.letter}"; is DrawerRow.App -> row.app.key } },
+                    contentType = { index -> when (rows[index]) { is DrawerRow.Header -> "header"; is DrawerRow.App -> "app" } },
                     span = { index -> if (rows[index] is DrawerRow.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1) }) { index ->
                     when (val row = rows[index]) {
                         is DrawerRow.Header -> Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {

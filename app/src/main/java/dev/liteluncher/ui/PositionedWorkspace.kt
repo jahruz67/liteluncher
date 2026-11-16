@@ -37,6 +37,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 internal fun rememberBackupBitmap(icon: BackupIcon?): Bitmap? {
+    if (icon == null) return null
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(null, icon) {
         value = withContext(Dispatchers.IO) {

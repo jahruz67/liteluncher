@@ -63,10 +63,12 @@ import dev.liteluncher.platform.*
 import dev.liteluncher.settings.ScreenManagerScreen
 import dev.liteluncher.settings.SettingsScreen
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 
@@ -128,6 +130,7 @@ fun LauncherApp(
     var appMenu by remember { mutableStateOf<AppEntry?>(null) }
     var appMenuScreen by remember { mutableStateOf(Screen.HOME) }
     var appMenuFromDock by remember { mutableStateOf(false) }
+    var appMenuFolderId by remember { mutableStateOf<String?>(null) }
     var appMenuDesktopPage by remember { mutableIntStateOf(0) }
     var editAppKey by rememberSaveable { mutableStateOf<String?>(null) }
     val editApp = apps.find { it.key == editAppKey }
@@ -220,15 +223,15 @@ fun LauncherApp(
     }
 
     val actions = WorkspaceActions(
-        launch = launch, menu = { appMenuScreen = manager.current; appMenuDesktopPage = currentDesktopPage; appMenuFromDock = false; appMenu = it }, navigate = navigate, settings = { panel = "settings" },
+        launch = launch, menu = { appMenuScreen = manager.current; appMenuDesktopPage = currentDesktopPage; appMenuFromDock = false; appMenuFolderId = null; appMenu = it }, navigate = navigate, settings = { panel = "settings" },
         manageScreens = { screenManagerReturn = panel; panel = "screens" }, manageLayout = { panel = "layout" }, widgets = {
             if (Screen.DESKTOP !in state.prefs.navigation.enabledScreens) toast("Enable Desktop in Manage screens first")
             else if (state.prefs.desktop.preventChanges) toast("Desktop is locked")
             else { navigate(Screen.DESKTOP); widgetPicker = true }
         },
         folder = { item, dock -> folder = item; folderFromDock = dock }, requestContacts = onContacts, update = model.store::update,
-        dockMenu = { appMenuFromDock = true; appMenuScreen = manager.current; appMenu = it },
-        folderMenu = { appMenuFromDock = false; appMenuScreen = Screen.APPS; appMenu = it },
+        dockMenu = { appMenuFromDock = true; appMenuFolderId = null; appMenuScreen = manager.current; appMenu = it },
+        folderMenu = { appMenuFromDock = false; appMenuFolderId = folder?.id; appMenuScreen = manager.current; appMenu = it },
         editFolder = { editingFolderId = it.id },
         folderActions = { folderMenu = it }, shortcut = launchShortcut
     )
@@ -456,30 +459,44 @@ fun LauncherApp(
         val requested = if (state.prefs.behavior.lockRotation && !isTablet) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         if (activity.requestedOrientation != requested) activity.requestedOrientation = requested
     }
-    val pagerProgress = if (horizontalScreens.size <= 1) 0f else
-        (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, (horizontalScreens.size - 1).toFloat()) / (horizontalScreens.size - 1)
-    val wallpaperPageProgress = if (manager.current == Screen.DESKTOP && state.prefs.desktop.pageCount > 1)
-        currentDesktopPage.toFloat() / (state.prefs.desktop.pageCount - 1) else pagerProgress
-    val wallpaperOffsets = when (state.prefs.behavior.wallpaperScroll) {
-        "Off" -> (when (state.prefs.behavior.wallpaperAlignment) { "Left" -> 0f; "Right" -> 1f; else -> .5f }) to .5f
-        "Horizontal" -> wallpaperPageProgress to .5f
-        else -> wallpaperPageProgress to (.5f + manager.current.y * .5f)
+    // Observe swipe frames in the effect, without recomposing the launcher for each offset.
+    val wallpaperOffsets by rememberUpdatedState {
+        val behavior = state.prefs.behavior
+        if (behavior.wallpaperScroll == "Off") {
+            (when (behavior.wallpaperAlignment) { "Left" -> 0f; "Right" -> 1f; else -> .5f }) to .5f
+        } else {
+            val progress = if (manager.current == Screen.DESKTOP && state.prefs.desktop.pageCount > 1)
+                currentDesktopPage.toFloat() / (state.prefs.desktop.pageCount - 1)
+            else if (horizontalScreens.size <= 1) 0f else
+                (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, (horizontalScreens.size - 1).toFloat()) / (horizontalScreens.size - 1)
+            progress to if (behavior.wallpaperScroll == "Horizontal") .5f else (.5f + manager.current.y * .5f)
+        }
     }
-    DisposableEffect(view, wallpaperOffsets, permissionSignal) {
+    val wallpaperManager = remember(context) { WallpaperManager.getInstance(context) }
+    DisposableEffect(view, wallpaperManager, permissionSignal) {
+        var offsetJob: Job? = null
         fun updateOffsets() {
-            runCatching {
-                view.windowToken?.let { token ->
-                    WallpaperManager.getInstance(context).setWallpaperOffsets(token, wallpaperOffsets.first, wallpaperOffsets.second)
+            offsetJob?.cancel()
+            offsetJob = scope.launch {
+                snapshotFlow { wallpaperOffsets() }.conflate().collect { (x, y) ->
+                    val token = view.windowToken ?: return@collect
+                    // A slow wallpaper service must not block input or queue stale offsets.
+                    withContext(Dispatchers.IO) {
+                        runCatching { wallpaperManager.setWallpaperOffsets(token, x, y) }
+                    }
                 }
             }
         }
         val listener = object : android.view.View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: android.view.View) = updateOffsets()
-            override fun onViewDetachedFromWindow(view: android.view.View) = Unit
+            override fun onViewDetachedFromWindow(view: android.view.View) { offsetJob?.cancel() }
         }
         view.addOnAttachStateChangeListener(listener)
-        updateOffsets()
-        onDispose { view.removeOnAttachStateChangeListener(listener) }
+        if (view.isAttachedToWindow) updateOffsets()
+        onDispose {
+            offsetJob?.cancel()
+            view.removeOnAttachStateChangeListener(listener)
+        }
     }
 
     BackHandler(enabled = panel.isNotEmpty() || manager.current != Screen.HOME || folder != null) {
@@ -583,6 +600,7 @@ fun LauncherApp(
                     val gestureModifier = Modifier.launcherGestures(
                         fingers = state.prefs.navigation.fingers,
                         home = manager.current == Screen.HOME,
+                        interceptVerticalSwipes = !state.prefs.home.listMode,
                         onPointerCountChange = { count ->
                             if (count > 0) {
                                 if (workspacePointerCount == 0) pagerHandledGesture = false
@@ -852,15 +870,18 @@ fun LauncherApp(
                     anchor = drag.menuAnchor,
                     state = state,
                     repository = model.apps,
-                    actions = actions,
                     onEdit = { editAppKey = appMenu?.key; appMenu = null },
                     onDismiss = { appMenu = null },
                     source = appMenuScreen,
                     fromDock = appMenuFromDock,
+                    folderId = appMenuFolderId,
                     onRemove = {
                         val key = appMenu!!.key
                         val desktopPage = appMenuDesktopPage
-                        if (appMenuScreen == Screen.DESKTOP && !appMenuFromDock) model.store.update { current ->
+                        val sourceFolder = appMenuFolderId
+                        if (sourceFolder != null) model.store.update { current ->
+                            applyAppDrop(current, key, null, AppDropTarget.Remove, sourceFolder).state
+                        } else if (appMenuScreen == Screen.DESKTOP && !appMenuFromDock) model.store.update { current ->
                             if (current.prefs.desktop.preventChanges) current else current.copy(desktopApps = current.desktopApps.mapValues { (page, keys) -> if (page == desktopPage) keys - key else keys })
                         } else {
                             val area = if (appMenuFromDock) LayoutArea.DOCK else if (appMenuScreen == Screen.FAVORITES) LayoutArea.FAVORITES else LayoutArea.HOME
@@ -951,7 +972,6 @@ internal fun FloatingDock(
         .pointerInput(Unit) {
             awaitPointerEventScope { while (true) {
                 touching = awaitPointerEvent().changes.any { it.pressed }
-                interaction++
             } }
         }
         .then(if (!prefs.preventChanges) Modifier.appDropTarget(AppDropTarget.Area(LayoutArea.DOCK), 1) else Modifier)) {

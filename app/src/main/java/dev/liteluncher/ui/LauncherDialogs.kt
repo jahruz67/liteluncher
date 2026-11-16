@@ -3,7 +3,6 @@
 package dev.liteluncher.ui
 
 import android.content.Intent
-import android.os.UserManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,8 +64,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 private val MenuBackground = Color(0xFF282E2F)
 private val MenuText = Color(0xFFBFC1C1)
@@ -79,24 +76,19 @@ fun AppContextMenu(
     anchor: Rect,
     state: LauncherState,
     repository: AppsRepository,
-    actions: WorkspaceActions,
     onEdit: () -> Unit,
     onDismiss: () -> Unit,
     source: Screen = Screen.HOME,
     fromDock: Boolean = false,
+    folderId: String? = null,
     onRemove: () -> Unit = {}
 ) {
-    val context = LocalContext.current
-    val shortcutRevision by repository.shortcutRevision.collectAsStateWithLifecycle()
-    val shortcuts by produceState<List<NativeShortcut>>(emptyList(), app.key, shortcutRevision) {
-        value = withContext(Dispatchers.IO) { repository.shortcuts(app) }
-    }
-    fun update(block: (LauncherState) -> LauncherState) { actions.update(block); onDismiss() }
     val removable = when {
+        folderId != null -> state.folders.any { it.id == folderId && app.key in it.apps } && !state.folderLocked(folderId)
         fromDock -> app.key in state.dockApps && !state.prefs.dock.preventChanges
         source == Screen.DESKTOP -> state.desktopApps.values.any { app.key in it } && !state.prefs.desktop.preventChanges
         source == Screen.HOME -> app.key in state.homeApps && !state.prefs.home.preventChanges
-        source == Screen.FAVORITES -> app.key in state.favoriteApps
+        source == Screen.FAVORITES -> true
         else -> false
     }
 
@@ -110,90 +102,11 @@ fun AppContextMenu(
         ) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 ActionRowItem("Edit", Icons.Default.Edit, onEdit)
-                ActionRowItem("App-Info", Icons.Outlined.Info, { repository.appInfo(app); onDismiss() })
-                if (removable) ActionRowItem("Remove", Icons.Default.Close, onRemove)
-
-                if (app.key !in state.homeApps && !state.prefs.home.preventChanges) {
-                    ActionRowItem("Add to Home", Icons.AutoMirrored.Rounded.AddToHomeScreen, {
-                        val full = state.layoutSpace(LayoutArea.HOME) == 0
-                        if (full) android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
-                        else actions.update { current ->
-                            if (current.prefs.home.preventChanges || current.layoutSpace(LayoutArea.HOME) == 0) current
-                            else current.copy(homeApps = (current.homeApps + app.key).distinct())
-                        }
-                        onDismiss()
-                    }, compact = true)
-                }
-                if (app.key !in state.dockApps && !state.prefs.dock.preventChanges) {
-                    ActionRowItem("Pin to Dock", Icons.Rounded.Dock, {
-                        val full = state.layoutSpace(LayoutArea.DOCK) == 0
-                        if (full) android.widget.Toast.makeText(context, "The dock has reached its item limit.", android.widget.Toast.LENGTH_SHORT).show()
-                        else actions.update { current ->
-                            if (current.prefs.dock.preventChanges || current.layoutSpace(LayoutArea.DOCK) == 0) current
-                            else current.copy(dockApps = (current.dockApps + app.key).distinct())
-                        }
-                        onDismiss()
-                    }, compact = true)
-                }
-                if (app.key !in state.favoriteApps) {
-                    ActionRowItem("Pin to Favorites", Icons.Rounded.Favorite, {
-                        if (state.favoriteApps.size >= state.prefs.favorites.maxItems) {
-                            android.widget.Toast.makeText(context, "Favorites is full. Increase its item limit in Settings.", android.widget.Toast.LENGTH_SHORT).show()
-                            onDismiss()
-                        } else update { current ->
-                            if (current.favoriteApps.size >= current.prefs.favorites.maxItems) current
-                            else current.copy(favoriteApps = (current.favoriteApps + app.key).distinct(),
-                                prefs = current.prefs.copy(favorites = current.prefs.favorites.copy(excluded = current.prefs.favorites.excluded - app.key)))
-                        }
-                    }, compact = true)
-                }
-
-                // Separated by hairline dividers from bottom Android deep app shortcuts
-                if (shortcuts.isNotEmpty()) {
-                    HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.5.dp)
-                    Text(
-                        "Shortcuts",
-                        fontSize = 10.sp,
-                        letterSpacing = 1.sp,
-                        color = Color.Gray,
-                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)
-                    )
-                    Column {
-                        shortcuts.forEach { shortcut ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { actions.shortcut(shortcut); onDismiss() }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.AutoMirrored.Rounded.Shortcut, null, tint = MenuIcon, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(10.dp))
-                                Text(shortcut.label, fontSize = 14.sp, color = MenuText, maxLines = 1, modifier = Modifier.weight(1f))
-                                IconButton(
-                                    onClick = {
-                                        val serial = requireNotNull(context.getSystemService(UserManager::class.java)).getSerialNumberForUser(shortcut.user)
-                                        val alreadyPinned = state.shortcuts.any {
-                                            it.id == shortcut.id && it.packageName == shortcut.packageName && it.userSerial == serial && it.container == "home"
-                                        }
-                                        if (!alreadyPinned && state.layoutSpace(LayoutArea.HOME) <= 0) {
-                                            android.widget.Toast.makeText(context, "Home is full. Remove an entry or increase the grid size.", android.widget.Toast.LENGTH_SHORT).show()
-                                            onDismiss()
-                                        } else if (!repository.syncShortcutPins(state.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial))) {
-                                            SystemActions.error(context, "Android could not pin this shortcut")
-                                        } else update { current ->
-                                            if (current.prefs.home.preventChanges || current.layoutSpace(LayoutArea.HOME) <= 0) current
-                                            else current.copy(shortcuts = (current.shortcuts + PinnedShortcut(shortcut.id, shortcut.packageName, shortcut.label, serial)).distinctBy { it.layoutKey to it.container })
-                                        }
-                                    },
-                                    enabled = !state.prefs.home.preventChanges,
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Rounded.Add, "Pin shortcut", modifier = Modifier.size(16.dp), tint = Color.Gray)
-                                }
-                            }
-                        }
-                    }
+                ActionRowItem("App Info", Icons.Outlined.Info, { repository.appInfo(app); onDismiss() })
+                when {
+                    folderId != null || fromDock -> ActionRowItem("Remove", Icons.Default.Close, onRemove, enabled = removable)
+                    source == Screen.APPS -> ActionRowItem("Uninstall", Icons.Rounded.DeleteOutline, { repository.uninstall(app); onDismiss() })
+                    source != Screen.SEARCH -> ActionRowItem("Remove", Icons.Default.Close, onRemove, enabled = removable)
                 }
             }
         }
@@ -274,18 +187,19 @@ fun EmptySpaceMenuDialog(
 }
 
 @Composable
-private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit, compact: Boolean = false) {
+private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit, enabled: Boolean = true) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = if (compact) 36.dp else 40.dp)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 6.dp),
+            .heightIn(min = 40.dp)
+            .alpha(if (enabled) 1f else .38f)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(if (compact) 20.dp else 22.dp))
+        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(12.dp))
-        Text(label, fontSize = if (compact) 14.sp else 16.sp, fontWeight = FontWeight.Normal, color = MenuText)
+        Text(label, fontSize = 16.sp, fontWeight = FontWeight.Normal, color = MenuText)
     }
 }
 
@@ -494,8 +408,8 @@ internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean
         Surface(shape = RoundedCornerShape(10.dp), color = MenuBackground, shadowElevation = 8.dp, modifier = Modifier.width(208.dp)) {
             Column(Modifier.padding(10.dp)) {
                 Text(folder.name, color = Color.White)
-                if (!locked) ActionRowItem("Edit folder", Icons.Rounded.Edit, onEdit)
-                if (!locked) ActionRowItem("Delete folder", Icons.Rounded.DeleteOutline, onRemove)
+                ActionRowItem("Edit", Icons.Rounded.Edit, onEdit, enabled = !locked)
+                ActionRowItem("Remove", Icons.Default.Close, onRemove, enabled = !locked)
             }
         }
     }

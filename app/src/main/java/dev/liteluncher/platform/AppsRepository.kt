@@ -247,6 +247,16 @@ class AppsRepository(context: Context) : AutoCloseable {
         } else SystemActions.error(context, "App information is unavailable for this profile.")
     }
 
+    fun uninstall(app: AppEntry) {
+        if (!profileAvailable(app.user)) {
+            SystemActions.error(context, "Unlock this app's profile first.")
+            return
+        }
+        SystemActions.open(context, Intent(Intent.ACTION_DELETE,
+            Uri.fromParts("package", app.packageName, null))
+            .putExtra("android.intent.extra.USER", app.user))
+    }
+
     fun shortcuts(app: AppEntry): List<NativeShortcut> {
         if (!profileAvailable(app.user)) return emptyList()
         return runCatching {

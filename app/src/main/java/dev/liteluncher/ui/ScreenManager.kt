@@ -62,15 +62,16 @@ class ScreenManager(initial: Screen = Screen.HOME) {
     }
 }
 
-/** Observe at Final so a list, icon or native widget retains its own touch sequence. */
+/** Reserve Home grid swipes at Initial; observe other gestures at Final so content can scroll. */
 @Composable
 fun Modifier.launcherGestures(
     fingers: Int, home: Boolean, onSwipe: (Direction, Int) -> Unit, onPinch: (Boolean) -> Unit,
-    onPointerCountChange: (Int) -> Unit = {}
+    onPointerCountChange: (Int) -> Unit = {}, interceptVerticalSwipes: Boolean = true
 ): Modifier {
     val swipeAction by rememberUpdatedState(onSwipe)
     val pinchAction by rememberUpdatedState(onPinch)
     val pointerCountAction by rememberUpdatedState(onPointerCountChange)
+    val interceptVertical by rememberUpdatedState(interceptVerticalSwipes)
     return pointerInput(fingers, home) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
@@ -78,6 +79,7 @@ fun Modifier.launcherGestures(
             var displacement = Offset.Zero
             var pointerCount = 1
             var consumed = false
+            var verticalSwipeClaimed = false
             var swipePointers = 1
             var firstSpan = 0f
             var lastSpan = 0f
@@ -85,7 +87,7 @@ fun Modifier.launcherGestures(
             pointerCountAction(1)
             try {
                 while (!finished) {
-                    val event = awaitPointerEvent(PointerEventPass.Final)
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
                     val pressed = event.changes.filter { it.pressed }
                     pointerCount = maxOf(pointerCount, pressed.size)
                     pointerCountAction(pointerCount)
@@ -93,9 +95,16 @@ fun Modifier.launcherGestures(
                         displacement = it.position - start
                     }
                     if (pressed.isNotEmpty() && maxOf(abs(displacement.x), abs(displacement.y)) > viewConfiguration.touchSlop) {
-                        swipePointers = pressed.size
+                        swipePointers = maxOf(swipePointers, pressed.size)
                     }
-                    event.changes.forEach {
+                    if (home && interceptVertical && fingers == 1 && pointerCount == 1 && !consumed &&
+                        event.changes.none { it.isConsumed } && abs(displacement.y) > viewConfiguration.touchSlop &&
+                        abs(displacement.y) > abs(displacement.x)) {
+                        verticalSwipeClaimed = true
+                    }
+                    if (verticalSwipeClaimed) event.changes.forEach { it.consume() }
+                    val finalEvent = awaitPointerEvent(PointerEventPass.Final)
+                    if (!verticalSwipeClaimed) finalEvent.changes.forEach {
                         if (it.pressed && it.previousPressed && it.position != it.previousPosition) {
                             consumed = consumed || it.isConsumed
                         }

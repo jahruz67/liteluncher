@@ -77,6 +77,12 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
     val iconRevision by repository.iconRevision.collectAsStateWithLifecycle()
     val cached = if (override?.iconUri.isNullOrBlank()) repository.cachedIconBitmap(app, pack) else null
     val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, override?.iconUri, pack, iconRevision) {
+        if (override?.iconUri.isNullOrBlank()) {
+            repository.cachedIconBitmap(app, pack)?.let {
+                value = it
+                return@produceState
+            }
+        }
         value = withContext(Dispatchers.IO) {
             val custom = override?.iconUri?.takeIf { it.startsWith("content://") }?.let { uri ->
                 runCatching {
