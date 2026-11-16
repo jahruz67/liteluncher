@@ -22,6 +22,7 @@ import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -161,6 +162,7 @@ fun LauncherApp(
     val horizontalScreens = state.prefs.navigation.horizontalScreens()
     val horizontalPaging = state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide"
     val pager = rememberPagerState(initialPage = horizontalScreens.indexOf(manager.current).coerceAtLeast(0), pageCount = { horizontalScreens.size })
+    val favoritesListState = rememberLazyListState()
 
     val toast: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     val launch: (AppEntry) -> Boolean = { app ->
@@ -413,8 +415,12 @@ fun LauncherApp(
         }
     }
 
-    LaunchedEffect(widgets, ready, state, currentDesktopPage) {
-        if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets, currentDesktopPage, state.desktopObstacles())
+    val desktopObstacles = remember(state.desktopApps, state.shortcuts, state.positions, state.pendingWidgets, state.prefs.desktop) {
+        state.desktopObstacles()
+    }
+    val pageObstacles = remember(desktopObstacles, currentDesktopPage) { desktopObstacles.filter { it.page == currentDesktopPage } }
+    LaunchedEffect(widgets, ready, state.prefs.desktop, state.widgets, currentDesktopPage, desktopObstacles) {
+        if (ready) widgets.updateLayout(state.prefs.desktop, state.widgets, currentDesktopPage, desktopObstacles)
     }
     val shortcutRevision by model.apps.shortcutRevision.collectAsStateWithLifecycle()
     LaunchedEffect(ready, state.shortcuts, state.prefs.gestures, permissionSignal, shortcutRevision) {
@@ -609,6 +615,7 @@ fun LauncherApp(
                         fingers = state.prefs.navigation.fingers,
                         home = manager.current == Screen.HOME,
                         interceptVerticalSwipes = !state.prefs.home.listMode,
+                        interceptDownwardSwipes = manager.current == Screen.FAVORITES && !favoritesListState.canScrollBackward,
                         onPointerCountChange = { count ->
                             if (count > 0) {
                                 if (workspacePointerCount == 0) pagerHandledGesture = false
@@ -687,7 +694,8 @@ fun LauncherApp(
                                         usage = usage,
                                         permissionSignal = permissionSignal,
                                         actions = actions,
-                                        onVoice = onVoice
+                                        onVoice = onVoice,
+                                        listState = favoritesListState
                                     )
                                     Screen.DESKTOP -> Box(Modifier.fillMaxSize().combinedClickable(onClick = {}, onLongClick = actions.widgets)) {
                                         val pageWidgets = state.widgets.filter { it.page == currentDesktopPage }
@@ -719,7 +727,7 @@ fun LauncherApp(
                                                 },
                                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                                                 onCanvasBounds = { desktopBounds = it },
-                                                blocked = state.desktopObstacles().filter { it.page == currentDesktopPage },
+                                                blocked = pageObstacles,
                                                 isActive = manager.current == Screen.DESKTOP && (!horizontalPaging || !pager.isScrollInProgress),
                                                 overlay = {
                                                     val grid = state.prefs.desktop.grid.copy(columns = state.prefs.desktop.columns, rows = state.prefs.desktop.rows)

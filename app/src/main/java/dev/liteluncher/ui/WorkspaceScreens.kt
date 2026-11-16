@@ -15,7 +15,9 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,6 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -63,6 +66,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 @Composable
@@ -159,7 +163,7 @@ fun HomeScreen(
                     val app = remember(apps, shortcut.packageName, shortcut.userSerial) {
                         apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
                     }
-                    val backup = rememberBackupBitmap(shortcut.backupIcon)
+                    val backup = rememberBackupBitmap(shortcut.backupIcon, repository)
                     Column(
                         Modifier.height(rowHeight).fillMaxWidth().clip(RoundedCornerShape(16.dp))
                             .semantics { contentDescription = shortcut.label }.combinedClickable(onClick = {
@@ -355,11 +359,17 @@ fun AppDrawer(
         if (Screen.APPS !in state.prefs.search.barScreens) filter = ""
     }
     val locale = LocalConfiguration.current.locales[0]
-    val collator = remember(locale) { Collator.getInstance(locale) }
-    val sortedApps = remember(apps, state.hiddenApps, state.overrides, collator) {
-        apps.filter { it.key !in state.hiddenApps }
-            .sortedWith { a, b -> collator.compare(state.overrides[a.key]?.label?.ifBlank { a.label } ?: a.label, state.overrides[b.key]?.label?.ifBlank { b.label } ?: b.label) }
+    val drawerApps = remember(apps, state.hiddenApps, state.overrides, locale) {
+        mutableStateOf<List<AppEntry>?>(null)
     }
+    LaunchedEffect(drawerApps) {
+        drawerApps.value = withContext(Dispatchers.Default) {
+            val collator = Collator.getInstance(locale)
+            apps.filter { it.key !in state.hiddenApps }
+                .sortedWith { a, b -> collator.compare(state.overrides[a.key]?.label?.ifBlank { a.label } ?: a.label, state.overrides[b.key]?.label?.ifBlank { b.label } ?: b.label) }
+        }
+    }
+    val sortedApps = drawerApps.value.orEmpty()
     val rows = remember(sortedApps, state.overrides, activeFilter) {
         val grouped = sortedApps.filter {
             (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(activeFilter, true)
@@ -406,7 +416,7 @@ fun AppDrawer(
     Column(Modifier.fillMaxSize().padding(end = 28.dp).imePadding()) {
         if (showSearchBar && !state.prefs.search.barAtBottom) searchField()
         if (rows.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
+            if (drawerApps.value != null) EmptyCard(Icons.Rounded.SearchOff, "No applications found", "Try another name or review your hidden apps in Settings.")
         }
         else {
             LazyVerticalGrid(
@@ -476,7 +486,7 @@ fun AppDrawer(
                 }
             }
             scrubLetter?.let { letter ->
-                Surface(Modifier.offset(x = (-54).dp, y = with(density) { scrubY.toDp() } - 24.dp).size(48.dp),
+                Surface(Modifier.offset { IntOffset((-54).dp.roundToPx(), scrubY.roundToInt() - 24.dp.roundToPx()) }.size(48.dp),
                     shape = CircleShape, color = Color.White.copy(alpha = .7f), contentColor = Ink) {
                     Box(contentAlignment = Alignment.Center) { Text(letter, fontSize = 24.sp) }
                 }
@@ -518,7 +528,8 @@ fun FavoritesScreen(
     usage: Map<String, Long>,
     permissionSignal: Int,
     actions: WorkspaceActions,
-    onVoice: (() -> Unit)? = null
+    onVoice: (() -> Unit)? = null,
+    listState: LazyListState = rememberLazyListState()
 ) {
     val prefs = state.prefs.favorites
     val excluded = buildSet {
@@ -565,7 +576,7 @@ fun FavoritesScreen(
     val showSearchBar = Screen.FAVORITES in state.prefs.search.barScreens
 
     Column(Modifier.fillMaxSize().padding(horizontal = prefs.grid.borderPaddingDp.dp)) {
-    LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+    LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
         if (showSearchBar && !state.prefs.search.barAtBottom) {
             item {
                 Spacer(Modifier.height(8.dp))

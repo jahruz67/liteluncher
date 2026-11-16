@@ -62,16 +62,18 @@ class ScreenManager(initial: Screen = Screen.HOME) {
     }
 }
 
-/** Reserve Home grid swipes at Initial; observe other gestures at Final so content can scroll. */
+/** Reserve navigation swipes at Initial; observe other gestures at Final so content can scroll. */
 @Composable
 fun Modifier.launcherGestures(
     fingers: Int, home: Boolean, onSwipe: (Direction, Int) -> Unit, onPinch: (Boolean) -> Unit,
-    onPointerCountChange: (Int) -> Unit = {}, interceptVerticalSwipes: Boolean = true
+    onPointerCountChange: (Int) -> Unit = {}, interceptVerticalSwipes: Boolean = true,
+    interceptDownwardSwipes: Boolean = false
 ): Modifier {
     val swipeAction by rememberUpdatedState(onSwipe)
     val pinchAction by rememberUpdatedState(onPinch)
     val pointerCountAction by rememberUpdatedState(onPointerCountChange)
     val interceptVertical by rememberUpdatedState(interceptVerticalSwipes)
+    val interceptDownward by rememberUpdatedState(interceptDownwardSwipes)
     return pointerInput(fingers, home) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
@@ -97,7 +99,8 @@ fun Modifier.launcherGestures(
                     if (pressed.isNotEmpty() && maxOf(abs(displacement.x), abs(displacement.y)) > viewConfiguration.touchSlop) {
                         swipePointers = maxOf(swipePointers, pressed.size)
                     }
-                    if (home && interceptVertical && fingers == 1 && pointerCount == 1 && !consumed &&
+                    if (((home && interceptVertical) || (interceptDownward && displacement.y > 0f)) &&
+                        fingers == 1 && pointerCount == 1 && !consumed &&
                         event.changes.none { it.isConsumed } && abs(displacement.y) > viewConfiguration.touchSlop &&
                         abs(displacement.y) > abs(displacement.x)) {
                         verticalSwipeClaimed = true
@@ -119,8 +122,8 @@ fun Modifier.launcherGestures(
                 pointerCountAction(0)
             }
             val pinch = firstSpan > 0f && abs(lastSpan - firstSpan) > 64 * density
-            val verticalHomeSwipe = home && abs(displacement.y) > abs(displacement.x)
-            val swipeThreshold = if (verticalHomeSwipe) maxOf(48 * density, viewConfiguration.touchSlop * 2) else 68 * density
+            val verticalNavigationSwipe = (home || verticalSwipeClaimed) && abs(displacement.y) > abs(displacement.x)
+            val swipeThreshold = if (verticalNavigationSwipe) maxOf(48 * density, viewConfiguration.touchSlop * 2) else 68 * density
             when {
                 pinch && home && !consumed -> pinchAction(lastSpan < firstSpan)
                 !consumed &&

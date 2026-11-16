@@ -2,7 +2,6 @@
 
 package dev.liteluncher.ui
 
-import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -46,7 +45,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.AppEntry
 import dev.liteluncher.platform.AppsRepository
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 fun iconShape(shape: IconShape): Shape = when (shape) {
@@ -70,32 +68,17 @@ internal fun badgeCounts(prefs: LauncherPrefs): Boolean = when (prefs.badges.sty
 
 @Composable
 fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, size: Int = 48, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
     val override = state.overrides[app.key]
-    val backupBitmap = rememberBackupBitmap(override?.backupIcon.takeIf { override?.iconUri.isNullOrBlank() })
+    val backupBitmap = rememberBackupBitmap(override?.backupIcon.takeIf { override?.iconUri.isNullOrBlank() }, repository)
     val pack = state.prefs.appearance.iconPack
     val iconRevision by repository.iconRevision.collectAsStateWithLifecycle()
-    val cached = if (override?.iconUri.isNullOrBlank()) repository.cachedIconBitmap(app, pack) else null
-    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, override?.iconUri, pack, iconRevision) {
-        if (override?.iconUri.isNullOrBlank()) {
-            repository.cachedIconBitmap(app, pack)?.let {
-                value = it
-                return@produceState
-            }
-        }
-        value = withContext(Dispatchers.IO) {
-            val custom = override?.iconUri?.takeIf { it.startsWith("content://") }?.let { uri ->
-                runCatching {
-                    val parsed = android.net.Uri.parse(uri)
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    context.contentResolver.openInputStream(parsed)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-                    val sample = generateSequence(1) { it * 2 }.first { bounds.outWidth / it <= 256 && bounds.outHeight / it <= 256 }
-                    context.contentResolver.openInputStream(parsed)?.use {
-                        BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
-                    }
-                }.getOrNull()
-            }
-            custom ?: repository.iconBitmap(app, pack)
+    val uri = override?.iconUri.orEmpty()
+    val cached = if (uri.isBlank()) repository.cachedIconBitmap(app, pack) else repository.imageLoader.cachedCustom(uri)
+    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, uri, pack, iconRevision) {
+        value = cached
+        if (cached != null) return@produceState
+        value = withContext(repository.imageLoader.dispatcher) {
+            repository.imageLoader.custom(uri) ?: repository.iconBitmap(app, pack)
         }
     }
     val shape = iconShape(override?.shape ?: state.prefs.appearance.iconShape)
@@ -145,20 +128,14 @@ fun AppTile(
 fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsRepository, state: LauncherState, prefs: GridPrefs,
     onClick: () -> Unit, onLongClick: () -> Unit = {}, modifier: Modifier = Modifier, container: String = "home") {
     val context = LocalContext.current
-    val customBitmap by produceState<android.graphics.Bitmap?>(null, folder.iconUri) {
-        value = withContext(Dispatchers.IO) { runCatching {
-            context.contentResolver.openInputStream(android.net.Uri.parse(folder.iconUri))?.use { stream ->
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeStream(stream, null, bounds)
-                var sample = 1
-                while (bounds.outWidth / sample > 256 || bounds.outHeight / sample > 256) sample *= 2
-                context.contentResolver.openInputStream(android.net.Uri.parse(folder.iconUri))?.use {
-                    BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
-                }
-            }
-        }.getOrNull() }
+    val iconRevision by repository.iconRevision.collectAsStateWithLifecycle()
+    val cached = repository.imageLoader.cachedCustom(folder.iconUri)
+    val customBitmap by produceState<android.graphics.Bitmap?>(cached, folder.iconUri, iconRevision) {
+        value = cached
+        if (cached != null || folder.iconUri.isBlank()) return@produceState
+        value = withContext(repository.imageLoader.dispatcher) { repository.imageLoader.custom(folder.iconUri) }
     }
-    val backupBitmap = customBitmap ?: rememberBackupBitmap(folder.backupIcon)
+    val backupBitmap = customBitmap ?: rememberBackupBitmap(folder.backupIcon, repository)
     val representative = apps.firstOrNull { it.key in folder.apps } ?: AppEntry("folder:${folder.id}", context.packageName,
         folder.name, android.content.ComponentName(context, dev.liteluncher.MainActivity::class.java), android.os.Process.myUserHandle())
     val area = when (container) { "dock" -> LayoutArea.DOCK; "home" -> LayoutArea.HOME; else -> null }

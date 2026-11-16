@@ -3,9 +3,7 @@
 package dev.liteluncher.ui
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.UserManager
-import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,37 +27,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.graphics.drawable.toBitmap
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun rememberBackupBitmap(icon: BackupIcon?): Bitmap? {
+internal fun rememberBackupBitmap(icon: BackupIcon?, repository: AppsRepository): Bitmap? {
     if (icon == null) return null
-    val context = LocalContext.current
-    val bitmap by produceState<Bitmap?>(null, icon) {
-        value = withContext(Dispatchers.IO) {
-            runCatching {
-                if (!icon?.bitmap.isNullOrEmpty()) {
-                    val bytes = Base64.decode(icon!!.bitmap, Base64.DEFAULT)
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                    require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096)
-                    var sample = 1
-                    while (bounds.outWidth / sample > 256 || bounds.outHeight / sample > 256) sample *= 2
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
-                } else if (icon != null && icon.packageName.isNotBlank() && icon.resourceName.isNotBlank()) {
-                    val resources = context.packageManager.getResourcesForApplication(icon.packageName)
-                    val type = icon.resourceName.substringBeforeLast('/', "drawable").substringAfter(':')
-                    val name = icon.resourceName.substringAfterLast('/')
-                    val id = resources.getIdentifier(name, type, icon.packageName).takeIf { it != 0 }
-                        ?: resources.getIdentifier(name, "mipmap", icon.packageName)
-                    if (id == 0) null else resources.getDrawable(id, null).toBitmap(168, 168)
-                } else null
-            }.getOrNull()
-        }
+    val revision by repository.iconRevision.collectAsStateWithLifecycle()
+    val cached = repository.imageLoader.cached(icon)
+    val bitmap by produceState<Bitmap?>(cached, icon, revision) {
+        value = cached
+        if (cached != null) return@produceState
+        value = withContext(repository.imageLoader.dispatcher) { repository.imageLoader.backup(icon) }
     }
     return bitmap
 }
@@ -68,7 +49,7 @@ internal fun rememberBackupBitmap(icon: BackupIcon?): Bitmap? {
 internal fun ShortcutTile(shortcut: PinnedShortcut, state: LauncherState, apps: List<AppEntry>, repository: AppsRepository,
     prefs: GridPrefs, actions: WorkspaceActions, modifier: Modifier = Modifier, onLaunch: () -> Unit = {}) {
     val context = LocalContext.current
-    val bitmap = rememberBackupBitmap(shortcut.backupIcon)
+    val bitmap = rememberBackupBitmap(shortcut.backupIcon, repository)
     val app = apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
     Column(modifier.semantics { contentDescription = shortcut.label }.combinedClickable(onClick = {
         val user = context.getSystemService(UserManager::class.java)?.getUserForSerialNumber(shortcut.userSerial)
@@ -212,7 +193,7 @@ private fun WorkspaceListEntry(key: String, container: String, state: LauncherSt
             }
         }
         shortcut != null -> {
-            val icon = rememberBackupBitmap(shortcut.backupIcon)
+            val icon = rememberBackupBitmap(shortcut.backupIcon, repository)
             val app = apps.firstOrNull { it.packageName == shortcut.packageName && it.key.substringAfterLast('|').toLongOrNull() == shortcut.userSerial }
             val locked = if (container == "dock") state.prefs.dock.preventChanges else state.prefs.home.preventChanges
             Row(Modifier.fillMaxWidth().height(72.dp).semantics { contentDescription = shortcut.label }.combinedClickable(onClick = {

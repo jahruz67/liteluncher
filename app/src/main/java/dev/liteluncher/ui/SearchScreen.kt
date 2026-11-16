@@ -99,16 +99,28 @@ fun SearchScreen(
     val focus = remember { FocusRequester() }
     val search = query.trim()
 
-    val matchingApps = remember(apps, search, prefs.apps, prefs.hiddenApps, state.hiddenApps, state.overrides) {
-        if (search.isBlank()) emptyList() else apps.filter {
-            (state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).contains(search, true)
-        }.sortedBy {
-            if ((state.overrides[it.key]?.label?.ifBlank { it.label } ?: it.label).startsWith(search, true)) 0 else 1
-        }
-    }
     val resultLimit = prefs.grid.rows * prefs.grid.columns
-    val matches = if (prefs.apps) matchingApps.filterNot { it.key in state.hiddenApps }.take(resultLimit) else emptyList()
-    val hiddenMatches = if (prefs.hiddenApps) matchingApps.filter { it.key in state.hiddenApps }.take(resultLimit) else emptyList()
+    val (matches, hiddenMatches) = remember(apps, search, prefs.apps, prefs.hiddenApps, state.hiddenApps, state.overrides, resultLimit) {
+        // Keep prefix matches first without sorting or retaining every match.
+        val visiblePrefixes = ArrayList<AppEntry>()
+        val visibleOthers = ArrayList<AppEntry>()
+        val hiddenPrefixes = ArrayList<AppEntry>()
+        val hiddenOthers = ArrayList<AppEntry>()
+        if (search.isNotBlank() && (prefs.apps || prefs.hiddenApps)) for (app in apps) {
+            val hidden = app.key in state.hiddenApps
+            if (if (hidden) !prefs.hiddenApps else !prefs.apps) continue
+            val prefixes = if (hidden) hiddenPrefixes else visiblePrefixes
+            if (prefixes.size >= resultLimit) continue
+            val label = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label
+            val target = when {
+                label.startsWith(search, true) -> prefixes
+                label.contains(search, true) -> if (hidden) hiddenOthers else visibleOthers
+                else -> continue
+            }
+            if (target.size < resultLimit) target.add(app)
+        }
+        (visiblePrefixes + visibleOthers).take(resultLimit) to (hiddenPrefixes + hiddenOthers).take(resultLimit)
+    }
     val contacts by produceState<List<ContactEntry>>(emptyList(), search, prefs.contacts, permissionSignal) {
         value = emptyList()
         if (prefs.contacts && search.isNotBlank()) {
