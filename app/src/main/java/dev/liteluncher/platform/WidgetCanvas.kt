@@ -43,8 +43,6 @@ import dev.liteluncher.data.WidgetItem
 import dev.liteluncher.data.borderPaddingDp
 import kotlin.math.roundToInt
 
-private val ResizeColor = Color.White
-
 @Composable
 fun WidgetCanvas(
     controller: WidgetController,
@@ -58,6 +56,7 @@ fun WidgetCanvas(
     isActive: Boolean = true,
     overlay: @Composable BoxWithConstraintsScope.() -> Unit = {}
 ) {
+    val resizeColor = MaterialTheme.colorScheme.primary
     val columns = prefs.columns.coerceIn(1, 24)
     val rows = prefs.rows.coerceIn(1, 32)
     val layout = remember(widgets, columns, rows, blocked) { WidgetGrid.arrange(widgets, columns, rows, blocked) }
@@ -147,7 +146,7 @@ fun WidgetCanvas(
                         AndroidView(
                             factory = { context -> HostedWidgetFrame(context, controller, item.id, providerChanges, onEdit) },
                             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(radius))
-                                .then(if (isResizing) Modifier.border(BorderStroke(2.dp, ResizeColor), RoundedCornerShape(radius)) else Modifier)
+                                .then(if (isResizing) Modifier.border(BorderStroke(2.dp, resizeColor), RoundedCornerShape(radius)) else Modifier)
                                 .semantics {
                                     customActions = listOf(CustomAccessibilityAction("Edit widget") { onEdit(); true }) +
                                         if (prefs.preventChanges) emptyList() else listOf(
@@ -240,7 +239,7 @@ fun WidgetCanvas(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Box(Modifier.size(if (horizontal) 18.dp else 6.dp, if (horizontal) 6.dp else 18.dp)
-                                        .background(ResizeColor, RoundedCornerShape(4.dp)))
+                                        .background(resizeColor, RoundedCornerShape(4.dp)))
                                 }
                             }
                         }
@@ -298,17 +297,17 @@ private fun WidgetContextMenu(
     onResize: () -> Unit, onRefresh: () -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit,
     onPreviousPage: (() -> Unit)? = null, onNextPage: (() -> Unit)? = null
 ) {
-    DropdownMenu(expanded, onDismiss, containerColor = Color(0xFF253238)) {
-        DropdownMenuItem(text = { Text("Move / resize", color = Color.White) }, onClick = onResize, enabled = canEdit,
-            leadingIcon = { Icon(Icons.Rounded.AspectRatio, null, tint = Color.White) })
-        DropdownMenuItem(text = { Text("Refresh", color = Color.White) }, onClick = onRefresh,
-            leadingIcon = { Icon(Icons.Rounded.Refresh, null, tint = Color.White) })
-        onPreviousPage?.let { action -> DropdownMenuItem(text = { Text("Move to previous page", color = Color.White) }, onClick = action,
-            leadingIcon = { Icon(Icons.Rounded.ChevronLeft, null, tint = Color.White) }) }
-        onNextPage?.let { action -> DropdownMenuItem(text = { Text("Move to next page", color = Color.White) }, onClick = action,
-            leadingIcon = { Icon(Icons.Rounded.ChevronRight, null, tint = Color.White) }) }
-        DropdownMenuItem(text = { Text("Remove", color = Color.White) }, onClick = onRemove, enabled = canRemove,
-            leadingIcon = { Icon(Icons.Rounded.Close, null, tint = Color.White) })
+    DropdownMenu(expanded, onDismiss, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        DropdownMenuItem(text = { Text("Move / resize") }, onClick = onResize, enabled = canEdit,
+            modifier = Modifier.height(40.dp), leadingIcon = { Icon(Icons.Rounded.AspectRatio, null) })
+        DropdownMenuItem(text = { Text("Refresh") }, onClick = onRefresh,
+            modifier = Modifier.height(40.dp), leadingIcon = { Icon(Icons.Rounded.Refresh, null) })
+        onPreviousPage?.let { action -> DropdownMenuItem(text = { Text("Move to previous page") }, onClick = action,
+            modifier = Modifier.height(40.dp), leadingIcon = { Icon(Icons.Rounded.ChevronLeft, null) }) }
+        onNextPage?.let { action -> DropdownMenuItem(text = { Text("Move to next page") }, onClick = action,
+            modifier = Modifier.height(40.dp), leadingIcon = { Icon(Icons.Rounded.ChevronRight, null) }) }
+        DropdownMenuItem(text = { Text("Remove") }, onClick = onRemove, enabled = canRemove,
+            modifier = Modifier.height(40.dp), leadingIcon = { Icon(Icons.Rounded.Close, null) })
     }
 }
 

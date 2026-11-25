@@ -35,7 +35,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,8 +88,8 @@ fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, siz
         val displayed = bitmap
         if (displayed != null) Image(displayed.asImageBitmap(), contentDescription = null,
             modifier = Modifier.fillMaxSize().then(if (state.prefs.appearance.forceAdaptive) Modifier.padding((size * .12f).dp) else Modifier), contentScale = ContentScale.Fit)
-        else Box(Modifier.fillMaxSize().background(Panel), contentAlignment = Alignment.Center) {
-            Text(app.label.take(1).uppercase(), color = Cerulean, fontSize = (size / 2).sp)
+        else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
+            Text(app.label.take(1).uppercase(), color = MaterialTheme.colorScheme.onSecondaryContainer, fontSize = (size / 2).sp)
         }
     }
 }
@@ -106,7 +105,7 @@ fun AppTile(
     val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
     val showCount = badgeCounts(state.prefs)
     Column(modifier.clip(RoundedCornerShape(16.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick, dragFolderId, desktopPage = desktopPage)
-        .padding(vertical = 8.dp, horizontal = 2.dp).semantics { contentDescription = label },
+        .padding(vertical = 4.dp, horizontal = 2.dp).semantics { contentDescription = label },
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box {
             AppIcon(app, repository, state, iconSize)
@@ -119,7 +118,7 @@ fun AppTile(
             }
         }
         if (prefs.labels) {
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(3.dp))
             Text(label, color = LocalContentColor.current, fontSize = (12 * textScale).sp, lineHeight = (15 * textScale).sp,
                 textAlign = TextAlign.Center, maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis)
         }
@@ -147,7 +146,7 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
             !state.folderLocked(folder.id) && (container == "home" && folder.id in state.homeFolders || container == "dock" && folder.id in state.dockFolders || container.startsWith("desktop:") && folder.id in state.desktopApps.values.flatten()),
             onClick, onLongClick, movingFolderId = folder.id,
             desktopPage = container.takeIf { it.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull())
-        ).padding(vertical = 8.dp),
+        ).padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (56 * prefs.iconScale).dp
         val folderColor = if (folderPrefs.background == "Custom") parseColor(folderPrefs.color)
@@ -171,7 +170,7 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
             }
         }
         if (folderPrefs.labels) {
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(3.dp))
             Text(folder.name, fontSize = (12 * folderPrefs.textScale).sp,
                 maxLines = if (folderPrefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         }
@@ -224,25 +223,18 @@ fun DeletionSnackbar(
         modifier = modifier
     ) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = Color(0xFF1E1E1E),
-            contentColor = Color.White,
-            shadowElevation = 8.dp,
-            border = BorderStroke(1.dp, Color(0x22FFFFFF))
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.inverseSurface,
+            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+            shadowElevation = 4.dp
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(message, fontSize = 13.sp, color = Color.White)
-                Spacer(Modifier.width(16.dp))
-                Text(
-                    "Undo",
-                    color = Cerulean,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable(onClick = onUndo)
-                )
+                Text(message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false))
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = onUndo) { Text("Undo", color = MaterialTheme.colorScheme.inversePrimary) }
             }
         }
     }
@@ -256,14 +248,14 @@ fun PageIndicators(
     onSelectPage: ((Int) -> Unit)? = null
 ) {
     Row(
-        modifier = modifier.padding(vertical = 8.dp),
+        modifier = modifier.padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         repeat(pageCount) { index ->
             val isActive = index == currentPage
-            val width = if (isActive) 18.dp else 6.dp
-            val color = if (isActive) Color.White else Color(0x60FFFFFF)
+            val width = if (isActive) 16.dp else 5.dp
+            val color = if (isActive) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(alpha = .35f)
             Box(
                 Modifier
                     .width(width)
@@ -283,17 +275,16 @@ fun PageIndicators(
 @Composable
 fun DestinationCapsule(destination: String, modifier: Modifier = Modifier) {
     Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = Color(0xCC000000),
-        contentColor = Color.White,
-        border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
         modifier = modifier
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.AutoMirrored.Rounded.DriveFileMove, null, tint = Cerulean, modifier = Modifier.size(16.dp))
+            Icon(Icons.AutoMirrored.Rounded.DriveFileMove, null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             Text(destination, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
@@ -302,21 +293,20 @@ fun DestinationCapsule(destination: String, modifier: Modifier = Modifier) {
 
 @Composable
 fun SectionLabel(text: String, trailing: String? = null, onTrailing: () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(text.uppercase(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
         if (trailing != null) TextButton(onClick = onTrailing, contentPadding = PaddingValues(horizontal = 4.dp)) { Text(trailing, fontSize = 11.sp) }
     }
 }
 
 @Composable
 fun PageHeader(eyebrow: String, title: String, icon: ImageVector, onAction: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(eyebrow.uppercase(), color = MaterialTheme.colorScheme.primary, fontSize = 10.sp, letterSpacing = 2.sp)
-            Spacer(Modifier.height(7.dp))
-            Text(title, fontSize = 30.sp, fontWeight = FontWeight.Light, letterSpacing = (-1).sp)
+            Text(eyebrow, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+            Text(title, style = MaterialTheme.typography.headlineMedium)
         }
-        IconButton(onClick = onAction, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = .7f), CircleShape)) {
+        FilledTonalIconButton(onClick = onAction, modifier = Modifier.size(40.dp)) {
             Icon(icon, contentDescription = "Page options")
         }
     }
@@ -324,13 +314,13 @@ fun PageHeader(eyebrow: String, title: String, icon: ImageVector, onAction: () -
 
 @Composable
 fun EmptyCard(icon: ImageVector, title: String, body: String, action: String? = null, onAction: () -> Unit = {}) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 24.dp).clip(RoundedCornerShape(24.dp))
-        .background(MaterialTheme.colorScheme.surface.copy(alpha = .75f)).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
-        Spacer(Modifier.height(15.dp))
-        Text(title, fontSize = 17.sp)
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(MaterialTheme.shapes.large)
+        .background(MaterialTheme.colorScheme.surfaceContainerLow).padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
         Spacer(Modifier.height(8.dp))
-        Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 19.sp)
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
         if (action != null) TextButton(onClick = onAction) { Text(action) }
     }
 }
@@ -338,9 +328,9 @@ fun EmptyCard(icon: ImageVector, title: String, body: String, action: String? = 
 @Composable
 fun ActionRow(label: String, icon: ImageVector, onClick: () -> Unit, detail: String? = null) {
     Surface(onClick = onClick, color = Color.Transparent, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.heightIn(min = 40.dp).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(label, fontSize = 14.sp)
                 if (detail != null) Text(detail, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

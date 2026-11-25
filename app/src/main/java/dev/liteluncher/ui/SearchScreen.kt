@@ -56,7 +56,7 @@ fun LauncherSearchField(
 ) {
     val foreground = surfaceContent(theme)
     Row(
-        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(50))
+        Modifier.fillMaxWidth().heightIn(min = 40.dp).clip(MaterialTheme.shapes.extraLarge)
             .background(surfaceColor(theme, MaterialTheme.colorScheme.primary))
             .then(if (onActivate != null) Modifier.clickable(onClick = onActivate) else Modifier)
             .padding(horizontal = 4.dp),
@@ -243,7 +243,7 @@ fun SearchScreen(
                     item { SectionLabel("Recent apps", "Clear", { actions.update { it.copy(history = emptyList()) } }) }
                     items(recentApps, key = { it.key }) { app ->
                         Row(
-                            Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp)
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp)
                                 .clickable { actions.launch(app) }
                                 .clip(RoundedCornerShape(12.dp)),
                             verticalAlignment = Alignment.CenterVertically
@@ -262,7 +262,7 @@ fun SearchScreen(
 
                 if (!hasResults && !prefs.web && !prefs.playStore) {
                     item {
-                        Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
                             Text("No results were found", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -273,14 +273,14 @@ fun SearchScreen(
                             SearchTarget.MATH -> if (calculation != null) {
                                 item {
                                     SectionLabel("Calculator")
-                                    Surface(onClick = { clipboard?.setPrimaryClip(ClipData.newPlainText("Calculation", calculation)) }, color = MaterialTheme.colorScheme.primary.copy(alpha = .11f), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
-                                        Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(onClick = { clipboard?.setPrimaryClip(ClipData.newPlainText("Calculation", calculation)) }, color = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Rounded.Calculate, null, tint = MaterialTheme.colorScheme.primary)
-                                            Column(Modifier.padding(start = 17.dp).weight(1f)) {
-                                                Text(search, fontSize = 12.sp, color = Muted)
-                                                Text("= $calculation", color = MaterialTheme.colorScheme.primary, fontSize = 27.sp)
+                                            Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                                                Text(search, style = MaterialTheme.typography.bodySmall)
+                                                Text("= $calculation", style = MaterialTheme.typography.headlineSmall)
                                             }
-                                            Icon(Icons.Rounded.ContentCopy, "Copy calculation", modifier = Modifier.size(17.dp), tint = Muted)
+                                            Icon(Icons.Rounded.ContentCopy, "Copy calculation", modifier = Modifier.size(17.dp))
                                         }
                                     }
                                 }

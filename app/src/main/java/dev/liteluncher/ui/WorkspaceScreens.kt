@@ -2,6 +2,8 @@
 
 package dev.liteluncher.ui
 
+import dev.liteluncher.ui.CompactAlertDialog as AlertDialog
+
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -234,6 +236,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
     }
     val context = LocalContext.current
     val color = parseColor(prefs.color, Mist)
+    val accent = MaterialTheme.colorScheme.primary
     val font = when (prefs.font) {
         "Serif" -> FontFamily.Serif
         "Monospace" -> FontFamily.Monospace
@@ -253,7 +256,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
         if (!launched) SystemActions.open(context, Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS))
     }
 
-    Column(modifier.fillMaxWidth().padding(start = 12.dp, top = 16.dp, bottom = 28.dp)) {
+    Column(modifier.fillMaxWidth().padding(start = 8.dp, top = 8.dp, bottom = 12.dp)) {
         if (prefs.analog) {
             // Analog clock rendering
             Box(Modifier.size((110 * prefs.size / 52f * textScale).dp)
@@ -286,7 +289,7 @@ internal fun ClockHeader(prefs: ClockPrefs, modifier: Modifier = Modifier) {
                         end = Offset((center.x + radius * 0.75f * cos(minuteAngle)).toFloat(), (center.y + radius * 0.75f * sin(minuteAngle)).toFloat()),
                         strokeWidth = 2.dp.toPx()
                     )
-                    drawCircle(color = Cerulean, radius = 3.dp.toPx(), center = center)
+                    drawCircle(color = accent, radius = 3.dp.toPx(), center = center)
                 }
             }
         } else {
@@ -505,14 +508,14 @@ fun AppDrawer(
                         fontWeight = if (letter in positions) FontWeight.Bold else FontWeight.Normal,
                         color = if (letter in positions) LocalContentColor.current.copy(alpha = .7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .25f),
                         modifier = Modifier.fillMaxWidth().weight(1f)
-                            .background(if (letter == (scrubLetter ?: visibleLetter)) Color.White.copy(alpha = .3f) else Color.Transparent, RoundedCornerShape(8.dp))
+                            .background(if (letter == (scrubLetter ?: visibleLetter)) MaterialTheme.colorScheme.primary.copy(alpha = .25f) else Color.Transparent, RoundedCornerShape(8.dp))
                             .clickable(enabled = letter in positions) { scrollTo(letter) }.wrapContentSize()
                     )
                 }
             }
             scrubLetter?.let { letter ->
                 Surface(Modifier.offset { IntOffset((-54).dp.roundToPx(), scrubY.roundToInt() - 24.dp.roundToPx()) }.size(48.dp),
-                    shape = CircleShape, color = Color.White.copy(alpha = .7f), contentColor = Ink) {
+                    shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer) {
                     Box(contentAlignment = Alignment.Center) { Text(letter, fontSize = 24.sp) }
                 }
             }
@@ -526,9 +529,9 @@ fun AppListRow(app: AppEntry, repository: AppsRepository, state: LauncherState, 
     val label = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label
     val badges by LauncherNotificationService.counts.collectAsStateWithLifecycle()
     Row(Modifier.fillMaxWidth().semantics { contentDescription = label }.clip(RoundedCornerShape(15.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick)
-        .padding(vertical = 10.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        .padding(vertical = 4.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         AppIcon(app, repository, state, (40 * prefs.iconScale).toInt())
-        if (prefs.labels) Text(label, modifier = Modifier.padding(start = 15.dp).weight(1f), fontSize = (14 * prefs.textScale).sp,
+        if (prefs.labels) Text(label, modifier = Modifier.padding(start = 10.dp).weight(1f), fontSize = (14 * prefs.textScale).sp,
             maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis)
         else Spacer(Modifier.weight(1f))
         val badgeCount = badges[app.badgeKey] ?: 0
@@ -638,13 +641,13 @@ fun FavoritesScreen(
                 }, onLongClick = {
                     val references = pinned.filter { it.second.id == person.id }.map { it.first }.toSet()
                     actions.update { it.copy(contacts = it.contacts.filterNot { reference -> reference in references }) }
-                }).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(44.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f), CircleShape), contentAlignment = Alignment.Center) { Text(person.name.take(1), color = MaterialTheme.colorScheme.primary, fontSize = 19.sp) }
-                    Text(person.name, modifier = Modifier.padding(start = 14.dp).weight(1f), fontSize = 14.sp)
-                    Icon(Icons.Rounded.ChevronRight, null, modifier = Modifier.size(18.dp), tint = Muted)
+                }).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(36.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape), contentAlignment = Alignment.Center) { Text(person.name.take(1), color = MaterialTheme.colorScheme.onSecondaryContainer, fontSize = 17.sp) }
+                    Text(person.name, modifier = Modifier.padding(start = 10.dp).weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    Icon(Icons.Rounded.ChevronRight, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (permitted && pinned.isEmpty()) item { Text("Pin a contact to add them here.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 24.dp)) }
+            if (permitted && pinned.isEmpty()) item { Text("Pin a contact to add them here.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
         }
         item { Spacer(Modifier.height(24.dp)) }
     }

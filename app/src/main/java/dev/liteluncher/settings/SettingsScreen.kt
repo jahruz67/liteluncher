@@ -161,10 +161,15 @@ private fun LazyListScope.settingsIndex(
 
 @Composable
 private fun SettingsIndexLink(title: String, icon: ImageVector, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(44.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(14.dp))
-        Text(title, fontSize = 14.sp)
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(10.dp)) {
+            Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                Icon(icon, null, modifier = Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Icon(Icons.Rounded.ChevronRight, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -175,19 +180,33 @@ private fun LazyListScope.appearanceSettings(
 ) {
     item {
         val appearance = prefs.appearance
-        SettingsSection("Theme") {
-            val themes = SurfaceTheme.entries.map { it to it.name.settingLabel() }
-            ChoiceSetting("Launcher theme", appearance.launcher, themes) { next -> update { it.copy(appearance = it.appearance.copy(launcher = next)) } }
-            ChoiceSetting("Dock theme", appearance.dock, themes) { next -> update { it.copy(appearance = it.appearance.copy(dock = next)) } }
-            ChoiceSetting("Search bar theme", appearance.search, themes) { next -> update { it.copy(appearance = it.appearance.copy(search = next)) } }
+        SettingsSection("Colors") {
+            ChoiceSetting("Color mode", appearance.mode, ThemeMode.entries.map { it to if (it == ThemeMode.ADVANCED) "AMOLED" else it.name.settingLabel() }) { next ->
+                update { it.copy(appearance = it.appearance.copy(mode = next)) }
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                ToggleSetting("Wallpaper colors", appearance.dynamicColor, "Use your wallpaper's Material palette") { next ->
+                    update { it.copy(appearance = it.appearance.copy(dynamicColor = next)) }
+                }
+            }
+            ColorSetting("Accent color", appearance.accent) { next ->
+                update { it.copy(appearance = it.appearance.copy(accent = next, dynamicColor = false)) }
+            }
+            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                val scheme = MaterialTheme.colorScheme
+                listOf(scheme.primary, scheme.secondary, scheme.tertiary, scheme.primaryContainer, scheme.secondaryContainer).forEach { color ->
+                    Surface(color = color, shape = RoundedCornerShape(8.dp), modifier = Modifier.weight(1f).height(20.dp)) {}
+                }
+            }
         }
     }
     item {
         val appearance = prefs.appearance
-        SettingsSection("Dark Mode") {
-            ChoiceSetting("Launcher mode", appearance.mode, ThemeMode.entries.map { it to it.name.settingLabel() }) { next ->
-                update { it.copy(appearance = it.appearance.copy(mode = next)) }
-            }
+        SettingsSection("Surfaces") {
+            val themes = SurfaceTheme.entries.map { it to it.name.settingLabel() }
+            ChoiceSetting("Launcher theme", appearance.launcher, themes) { next -> update { it.copy(appearance = it.appearance.copy(launcher = next)) } }
+            ChoiceSetting("Dock theme", appearance.dock, themes) { next -> update { it.copy(appearance = it.appearance.copy(dock = next)) } }
+            ChoiceSetting("Search bar theme", appearance.search, themes) { next -> update { it.copy(appearance = it.appearance.copy(search = next)) } }
             ToggleSetting("Dark texts on screens", appearance.darkTexts) { next ->
                 update { it.copy(appearance = it.appearance.copy(darkTexts = next)) }
             }
@@ -203,22 +222,14 @@ private fun LazyListScope.appearanceSettings(
             ColorSetting("Background Color", appearance.backgroundColor) { next ->
                 update { it.copy(appearance = it.appearance.copy(backgroundColor = next)) }
             }
-            ValidatedTextSetting("Accent color", appearance.accent, "#RRGGBB or #AARRGGBB", ::colorError,
-                normalize = { it.trim().uppercase(Locale.ROOT) }) { next ->
-                update { it.copy(appearance = it.appearance.copy(accent = next)) }
-            }
         }
     }
     item {
         val appearance = prefs.appearance
         SettingsSection("Icons") {
-            val packs = listOf("" to "System Theme") + iconPacks.distinctBy { it.first }
-            val choices = if (appearance.iconPack.isNotBlank() && packs.none { it.first == appearance.iconPack }) {
-                packs + (appearance.iconPack to "Unavailable pack (${appearance.iconPack})")
-            } else packs
-            ChoiceSetting("Theme selector", appearance.iconPack, choices) { next -> update { it.copy(appearance = it.appearance.copy(iconPack = next)) } }
+            IconPackSetting(appearance.iconPack, iconPacks) { next -> update { it.copy(appearance = it.appearance.copy(iconPack = next)) } }
             ToggleSetting("Force adaptive icons", appearance.forceAdaptive) { next -> update { it.copy(appearance = it.appearance.copy(forceAdaptive = next)) } }
-            ChoiceSetting("Shape selector", appearance.iconShape, listOf(IconShape.SQUIRCLE, IconShape.CIRCLE, IconShape.ROUNDED_SQUARE, IconShape.TEARDROP).map { it to it.name.settingLabel() }) { next ->
+            ChoiceSetting("Icon shape", appearance.iconShape, IconShape.entries.map { it to it.name.settingLabel() }) { next ->
                 update { it.copy(appearance = it.appearance.copy(iconShape = next)) }
             }
         }

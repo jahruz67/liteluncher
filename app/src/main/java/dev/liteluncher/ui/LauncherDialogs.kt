@@ -64,10 +64,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.liteluncher.data.*
 import dev.liteluncher.platform.*
+import dev.liteluncher.ui.CompactAlertDialog as AlertDialog
 
-private val MenuBackground = Color(0xFF282E2F)
-private val MenuText = Color(0xFFBFC1C1)
-private val MenuIcon = Color(0xFFE3E6E5)
+private val MenuBackground: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainerHigh
+private val MenuText: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+private val MenuIcon: Color @Composable get() = MaterialTheme.colorScheme.primary
 
 /** An in-window menu keeps the original icon's touch sequence alive for dragging. */
 @Composable
@@ -94,7 +95,7 @@ fun AppContextMenu(
 
     AnchoredIconMenu(anchor, onDismiss) {
         Surface(
-            shape = RoundedCornerShape(10.dp),
+            shape = MaterialTheme.shapes.large,
             color = MenuBackground,
             contentColor = MenuText,
             shadowElevation = 8.dp,
@@ -116,6 +117,7 @@ fun AppContextMenu(
 @Composable
 private fun AnchoredIconMenu(anchor: Rect, onDismiss: () -> Unit, content: @Composable () -> Unit) {
     BackHandler(onBack = onDismiss)
+    val background = MenuBackground
     var origin by remember { mutableStateOf(Offset.Zero) }
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().clickable(
@@ -129,7 +131,7 @@ private fun AnchoredIconMenu(anchor: Rect, onDismiss: () -> Unit, content: @Comp
                     lineTo(size.width, 0f)
                     lineTo(size.width / 2, size.height)
                     close()
-                }, MenuBackground)
+                }, background)
             }
         }, modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 8.dp)
             .onGloballyPositioned { origin = it.positionInRoot() }) { measurables, constraints ->
@@ -158,7 +160,7 @@ private fun AnchoredIconMenu(anchor: Rect, onDismiss: () -> Unit, content: @Comp
     }
 }
 
-/** Empty Space Context Menu: Dark card with Change Wallpaper, Add Widget, Settings, and Manage Layout */
+/** Compact tonal menu for workspace actions. */
 @Composable
 fun EmptySpaceMenuDialog(
     onWallpaper: () -> Unit,
@@ -170,7 +172,7 @@ fun EmptySpaceMenuDialog(
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(10.dp),
+            shape = MaterialTheme.shapes.large,
             color = MenuBackground,
             contentColor = MenuText,
             shadowElevation = 8.dp,
@@ -197,9 +199,9 @@ private fun ActionRowItem(label: String, icon: androidx.compose.ui.graphics.vect
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.width(12.dp))
-        Text(label, fontSize = 16.sp, fontWeight = FontWeight.Normal, color = MenuText)
+        Icon(icon, null, tint = MenuIcon, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = MenuText)
     }
 }
 
@@ -218,7 +220,7 @@ fun EditAppDialog(app: AppEntry, state: LauncherState, update: ((LauncherState) 
         }
     }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit application") }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(label, { label = it.take(80) }, label = { Text("Display name") }, singleLine = true)
             Text("Custom App Icon & Masking Shape", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedButton(onClick = { pickIcon.launch(arrayOf("image/*")) }, modifier = Modifier.fillMaxWidth()) {
@@ -291,7 +293,7 @@ fun FolderOverlay(
     Box(Modifier.fillMaxSize().alpha(if (draggingOutside) 0f else 1f).background(ColorForOverlay).imePadding().clickable(onClick = onDismiss)) {
         if (!stack) {
             val keys = state.workspaceKeys("folder:${folder.id}")
-            Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 360.dp)
+            Surface(Modifier.align(Alignment.Center).padding(16.dp).widthIn(max = 360.dp)
                 .onGloballyPositioned { bounds = it.boundsInRoot() }.appDropTarget(AppDropTarget.Folder(folder.id), 4).clickable {},
                 color = background, contentColor = folderContent, shape = RoundedCornerShape(28.dp)) {
                 Column(Modifier.padding(14.dp)) {
@@ -301,7 +303,7 @@ fun FolderOverlay(
                             Row(Modifier.fillMaxWidth()) {
                                 row.forEach { key ->
                                     WorkspaceEntry(key, "folder:${folder.id}", state, apps, repository,
-                                        state.prefs.home.copy(columns = 3), folderBadges, actions, Modifier.weight(1f).height(100.dp), onDismiss)
+                                        state.prefs.home.copy(columns = 3), folderBadges, actions, Modifier.weight(1f).heightIn(min = 80.dp), onDismiss)
                                 }
                                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                             }
@@ -322,10 +324,11 @@ fun FolderOverlay(
             ) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xCC000000),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(bottom = 4.dp)
                 ) {
-                    EditableFolderName(folder, state, actions, Modifier.padding(horizontal = 12.dp), 12.sp, Mist)
+                    EditableFolderName(folder, state, actions, Modifier.padding(horizontal = 12.dp), 12.sp)
                 }
                 val keys = state.workspaceKeys("folder:${folder.id}")
                 keys.forEachIndexed { index, entryKey ->
@@ -405,9 +408,9 @@ private fun EditableFolderName(
 @Composable
 internal fun FolderContextMenu(folder: FolderItem, anchor: Rect, locked: Boolean, onEdit: () -> Unit, onDismiss: () -> Unit, onRemove: () -> Unit = {}) {
     AnchoredIconMenu(anchor, onDismiss) {
-        Surface(shape = RoundedCornerShape(10.dp), color = MenuBackground, shadowElevation = 8.dp, modifier = Modifier.width(208.dp)) {
+        Surface(shape = MaterialTheme.shapes.large, color = MenuBackground, contentColor = MenuText, shadowElevation = 8.dp, modifier = Modifier.width(208.dp)) {
             Column(Modifier.padding(10.dp)) {
-                Text(folder.name, color = Color.White)
+                Text(folder.name, style = MaterialTheme.typography.titleSmall)
                 ActionRowItem("Edit", Icons.Rounded.Edit, onEdit, enabled = !locked)
                 ActionRowItem("Remove", Icons.Default.Close, onRemove, enabled = !locked)
             }
@@ -431,7 +434,7 @@ internal fun FolderEditor(folder: FolderItem, apps: List<AppEntry>, onSave: (Fol
         Column {
             OutlinedTextField(name, { name = it.take(128) }, label = { Text("Folder name") }, singleLine = true)
             OutlinedTextField(filter, { filter = it.take(80) }, label = { Text("Filter applications") }, singleLine = true, modifier = Modifier.padding(top = 10.dp))
-            Text("${selected.size} selected", fontSize = 12.sp, color = Muted, modifier = Modifier.padding(vertical = 10.dp))
+            Text("${selected.size} selected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(vertical = 6.dp))
             LazyColumn(Modifier.heightIn(max = 320.dp)) {
                 items(unavailable, key = { "unavailable:$it" }) { key ->
                     Row(Modifier.fillMaxWidth().clickable { selected = selected - key }, verticalAlignment = Alignment.CenterVertically) {

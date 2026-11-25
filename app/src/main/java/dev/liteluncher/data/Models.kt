@@ -124,7 +124,8 @@ data class AppearancePrefs(
     val lightNavigationIcons: Boolean = true, val darkTexts: Boolean = false,
     val dimMode: String = "Follow Theme", val backgroundColor: String = "#80000000", val forceAdaptive: Boolean = false,
     val statusIcons: String = "Follow Theme", val navigationIcons: String = "Follow Theme",
-    val customBarColor: Boolean = false, val statusColor: String = "#00000000", val navigationColor: String = "#00000000"
+    val customBarColor: Boolean = false, val statusColor: String = "#00000000", val navigationColor: String = "#00000000",
+    val dynamicColor: Boolean = false
 )
 @Serializable
 data class BadgePrefs(val enabled: Boolean = true, val counts: Boolean = false, val color: String = "#FF266AB3", val scale: Float = 1f, val style: String = "Follow Theme")

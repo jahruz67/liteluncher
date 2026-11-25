@@ -2,6 +2,8 @@
 
 package dev.liteluncher.ui
 
+import dev.liteluncher.ui.CompactAlertDialog as AlertDialog
+
 import android.graphics.Bitmap
 import android.os.UserManager
 import androidx.compose.foundation.Image
@@ -222,12 +224,12 @@ private fun WorkspaceListEntry(key: String, container: String, state: LauncherSt
 @Composable
 internal fun PendingWidgetTile(item: PortableWidget, controller: WidgetController, modifier: Modifier = Modifier, enabled: Boolean = true, onRemove: () -> Unit) {
     val context = LocalContext.current
-    Column(modifier.background(Panel).clickable(enabled = enabled) {
+    Column(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(enabled = enabled) {
         val provider = controller.providers().find { it.provider.flattenToString() == item.provider }
         if (provider == null) SystemActions.error(context, "Install this widget's app before restoring it")
         else controller.add(provider, item.location())
     }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(Icons.Rounded.Widgets, null, tint = Cerulean)
+        Icon(Icons.Rounded.Widgets, null, tint = MaterialTheme.colorScheme.primary)
         Text("Restore widget", fontSize = 12.sp)
         Text(item.provider.substringBefore('/'), fontSize = 10.sp, maxLines = 2, textAlign = TextAlign.Center)
         TextButton(onClick = onRemove, enabled = enabled) { Text("Remove") }

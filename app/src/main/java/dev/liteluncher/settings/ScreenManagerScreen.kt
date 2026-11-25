@@ -26,10 +26,8 @@ import dev.liteluncher.data.LauncherState
 import dev.liteluncher.data.NavigationPrefs
 import dev.liteluncher.data.Screen
 import dev.liteluncher.data.minimumDesktopPages
+import dev.liteluncher.ui.CompactAlertDialog as AlertDialog
 
-private val FrostedGlass = Color(0xBFFFFFFF)
-private val CardInk = Color(0xFF222222)
-private val RedBadge = Color(0xFFD46264)
 private val navigationPresets = listOf(
     "Cross" to Screen.entries.toSet(),
     "Horizontal" to setOf(Screen.HOME, Screen.DESKTOP, Screen.APPS),
@@ -56,14 +54,17 @@ fun ScreenManagerScreen(
     }
 
     SettingsTheme {
-        Column(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Screen Manager", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text(if (navigation.fingers == 1) "One finger" else "Two fingers",
-                    color = Color(0xFFAAAAAA), fontSize = 15.sp, modifier = Modifier.padding(top = 3.dp))
+        Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
+                Column(Modifier.weight(1f)) {
+                    Text("Screen manager", style = MaterialTheme.typography.titleLarge)
+                    Text(if (navigation.fingers == 1) "One finger navigation" else "Two finger navigation",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
             }
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                // Match the portrait cards in the reference while fitting short and landscape displays.
+                // Preserve the spatial navigation map on short and landscape displays.
                 val cardWidth = minOf((maxWidth - 88.dp) / 3, (maxHeight - 28.dp) / 5.4f).coerceAtLeast(0.dp)
                 val cardHeight = cardWidth * 1.7f
                 val gap = 8.dp
@@ -78,8 +79,8 @@ fun ScreenManagerScreen(
                     ScreenCard(Screen.FAVORITES, Screen.FAVORITES in navigation.enabledScreens, setEnabled, Modifier.size(cardWidth, cardHeight))
                 }
             }
-            Surface(color = Color(0xFF242829), shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)) {
-                Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(vertical = 8.dp),
+            Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) {
                         ManagerControl("More", Icons.Rounded.MoreHoriz, { showMore = true }, Modifier.fillMaxWidth())
@@ -133,21 +134,22 @@ private fun ScreenCard(
         Screen.FAVORITES -> Icons.Rounded.Favorite
     }
     Box(modifier) {
-        Column(Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp))
-            .background(if (enabled) FrostedGlass else FrostedGlass.copy(alpha = .25f))
+        Column(Modifier.fillMaxSize().clip(MaterialTheme.shapes.large)
+            .background(if (enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest)
             .clickable(enabled = !enabled) { onSetEnabled(screen, true) }.padding(horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(if (enabled) icon else Icons.Rounded.Add, null,
-                tint = if (enabled) CardInk else Color.White, modifier = Modifier.fillMaxWidth(.4f).aspectRatio(1f))
-            Spacer(Modifier.height(8.dp))
-            Text(screen.title, color = if (enabled) CardInk else Color.White, fontSize = 15.sp,
-                lineHeight = 18.sp, textAlign = TextAlign.Center, maxLines = 2)
+                tint = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(.35f).aspectRatio(1f))
+            Spacer(Modifier.height(6.dp))
+            Text(screen.title, color = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, maxLines = 2)
         }
         if (enabled && screen != Screen.HOME) {
             Box(Modifier.align(Alignment.TopEnd).offset(x = 2.dp, y = (-2).dp)
-                .size(30.dp).clip(CircleShape).background(RedBadge)
+                .size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.errorContainer)
                 .clickable { onSetEnabled(screen, false) }, contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.Close, "Remove ${screen.title}", tint = Color.White, modifier = Modifier.size(24.dp))
+                Icon(Icons.Rounded.Close, "Remove ${screen.title}", tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -157,12 +159,12 @@ private fun ScreenCard(
 private fun ManagerControl(
     label: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier, enabled: Boolean = true
 ) {
-    val color = if (enabled) Color(0xFFBBBBBB) else Color(0xFF686C6D)
-    Column(modifier.heightIn(min = 56.dp).clickable(enabled = enabled, onClick = onClick),
+    val color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else .38f)
+    Column(modifier.heightIn(min = 48.dp).clickable(enabled = enabled, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(icon, null, tint = color, modifier = Modifier.size(25.dp))
-        Spacer(Modifier.height(10.dp))
-        Text(label, color = color, fontSize = 15.sp, textAlign = TextAlign.Center)
+        Icon(icon, null, tint = color, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, color = color, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center)
     }
 }
 

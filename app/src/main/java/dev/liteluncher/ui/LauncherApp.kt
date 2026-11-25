@@ -380,7 +380,8 @@ fun LauncherApp(
         if (needsUsage) usage = withContext(Dispatchers.IO) { model.apps.usage() }
     }
     val needsIconPacks = panel == "settings"
-    LaunchedEffect(permissionSignal, apps, needsIconPacks) {
+    val iconRevision by model.apps.iconRevision.collectAsStateWithLifecycle()
+    LaunchedEffect(permissionSignal, iconRevision, needsIconPacks) {
         if (needsIconPacks) iconPacks = withContext(Dispatchers.IO) { model.apps.iconPacks() }
     }
     LaunchedEffect(homeSignal) {
@@ -542,11 +543,13 @@ fun LauncherApp(
                 }
 
                 if (!ready) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Cerulean) }
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 } else if (panel == "screens" || panel == "layout") {
-                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                        if (panel == "layout") ManageLayoutScreen(state, model.store::update, { panel = "" })
-                        else ScreenManagerScreen(state, model.store::update, { panel = screenManagerReturn })
+                    MaterialTheme(colorScheme = baseScheme) {
+                        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                            if (panel == "layout") ManageLayoutScreen(state, model.store::update, { panel = "" })
+                            else ScreenManagerScreen(state, model.store::update, { panel = screenManagerReturn })
+                        }
                     }
                 } else if (panel.isNotEmpty()) {
                     MaterialTheme(colorScheme = baseScheme) {
@@ -852,6 +855,7 @@ fun LauncherApp(
                 if (currentFolder != null) {
                     FolderOverlay(currentFolder, folderFromDock, state, apps, model.apps, actions.copy(menu = actions.folderMenu), { folder = null })
                 }
+                MaterialTheme(colorScheme = baseScheme) {
                 folderMenu?.let { selected ->
                     FolderContextMenu(selected, drag.menuAnchor, state.folderLocked(selected.id), {
                         folderMenu = null
@@ -871,8 +875,10 @@ fun LauncherApp(
                         editingFolderId = null
                     }, { editingFolderId = null }, state.overrides)
                 }
+                }
                 DeletionSnackbar(snackbarVisible, snackbarMessage, undoRemoval, Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
                 AppDragOverlay(drag, state, model.apps)
+                MaterialTheme(colorScheme = baseScheme) {
                 if (widgetPicker) WidgetPicker(
                     controller = widgets, prefs = state.prefs.desktop, page = currentDesktopPage, canvasBounds = desktopBounds,
                     onSelect = { provider, location ->
@@ -881,6 +887,7 @@ fun LauncherApp(
                     },
                     onDismiss = { widgetPicker = false }
                 )
+                }
 
             MaterialTheme(colorScheme = baseScheme) {
             CompositionLocalProvider(LocalContentColor provides baseScheme.onSurface) {
@@ -917,7 +924,7 @@ fun LauncherApp(
                     onDismiss = { editAppKey = null }
                 )
 
-                // Empty Space Context Menu: Dark card with Change Wallpaper, Add Widget, Settings, and Manage Layout
+                // Workspace actions use the same tonal surfaces as settings.
                 if (emptyMenu) EmptySpaceMenuDialog(
                     onWallpaper = { emptyMenu = false; SystemActions.wallpaper(activity) },
                     onAddWidget = { emptyMenu = false; actions.widgets() },

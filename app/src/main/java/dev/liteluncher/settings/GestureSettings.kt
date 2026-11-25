@@ -14,7 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import dev.liteluncher.ui.CompactAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -111,8 +111,8 @@ private fun GestureBindingDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(20.dp), color = SettingsPanel,
             modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
-            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(gesture.gestureLabel(), style = MaterialTheme.typography.titleMedium)
                 val isSwipe = gesture in listOf(Gesture.SWIPE_UP, Gesture.SWIPE_DOWN, Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT, Gesture.TWO_UP, Gesture.TWO_DOWN, Gesture.TWO_LEFT, Gesture.TWO_RIGHT)
                 val options = if (isSwipe) Action.entries else Action.entries.filterNot { it == Action.NAVIGATE }
@@ -123,7 +123,7 @@ private fun GestureBindingDialog(
                             target = ""
                             shortcutId = ""
                         }
-                    }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    }, verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = action == option, onClick = {
                             action = option
                             if (option != Action.APP && option != Action.SHORTCUT) {
@@ -201,7 +201,7 @@ private fun AppChooserDialog(
                     label = { Text("Filter apps") }, singleLine = true)
                 LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
                     items(filtered, key = { it.key }) { app ->
-                        Row(Modifier.fillMaxWidth().clickable { onSelect(app) }.padding(vertical = 8.dp),
+                        Row(Modifier.fillMaxWidth().clickable { onSelect(app) }.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = app.key == selectedKey, onClick = { onSelect(app) })
                             Column(Modifier.weight(1f)) {

@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material3.*
+import dev.liteluncher.ui.CompactAlertDialog as AlertDialog
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -136,9 +137,10 @@ private fun AppBlacklist(title: String, apps: List<AppEntry>, selected: Set<Stri
 internal fun ColorSetting(title: String, value: String, save: (String) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Surface(color = settingsColor(value), modifier = Modifier.size(24.dp), shape = androidx.compose.foundation.shape.CircleShape) {}
-        Text(value, Modifier.padding(start = 12.dp))
+        Box(Modifier.weight(1f).padding(start = 10.dp)) {
+            ValidatedTextSetting(title, value, "#RRGGBB or #AARRGGBB", ::colorError, onSave = save)
+        }
     }
-    ValidatedTextSetting(title, value, "#RRGGBB or #AARRGGBB", ::colorError, onSave = save)
 }
 
 internal fun LazyListScope.searchPreferences(state: LauncherState, update: ((LauncherPrefs) -> LauncherPrefs) -> Unit, write: ((LauncherState) -> LauncherState) -> Unit) {

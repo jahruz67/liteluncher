@@ -106,17 +106,17 @@ fun WidgetPicker(
     Box(Modifier.fillMaxSize().onGloballyPositioned { pickerBounds = it.boundsInRoot() }) {
         // Keep the list composed while dragging so its pointer handler keeps the held finger.
         Column(Modifier.fillMaxSize().alpha(if (active == null) 1f else 0f)
-            .background(Color.Black.copy(alpha = .35f)).clickable {}
+            .background(MaterialTheme.colorScheme.background).clickable {}
             .windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Close widgets", tint = Color.White) }
-                Box(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Close widgets", tint = MaterialTheme.colorScheme.onSurface) }
+                Box(Modifier.weight(1f).padding(vertical = 4.dp)) {
                     LauncherSearchField(query, { query = it }, "Search widgets", {}, null, SurfaceTheme.GLASS)
                 }
             }
             if (providers == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
-            } else if (groups.isEmpty()) Text("No widgets found", color = Color.White, modifier = Modifier.padding(20.dp))
+            } else if (groups.isEmpty()) Text("No widgets found", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
             else LazyColumn(Modifier.weight(1f)) {
                 groups.forEach { (key, label, widgets) ->
                     val open = if (query.isNotBlank()) key !in collapsed else expanded == key
@@ -124,21 +124,21 @@ fun WidgetPicker(
                         Row(Modifier.fillMaxWidth().clickable {
                             if (query.isNotBlank()) collapsed = if (open) collapsed + key else collapsed - key
                             else expanded = if (open) null else key
-                        }.padding(vertical = 12.dp),
+                        }.padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically) {
-                            WidgetPreview(widgets.first().provider, true, Modifier.size(36.dp))
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                Text(label, color = Color.White, fontSize = 15.sp)
-                                Text("${widgets.size} widget${if (widgets.size == 1) "" else "s"}", color = Color.LightGray, fontSize = 12.sp)
+                            WidgetPreview(widgets.first().provider, true, Modifier.size(32.dp))
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text(label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
+                                Text("${widgets.size} widget${if (widgets.size == 1) "" else "s"}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                             }
-                            Icon(if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = Color.LightGray)
+                            Icon(if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     if (open) {
                         items(widgets, key = { "widget:${it.provider.provider.flattenToString()}" }, contentType = { "widget" }) { (provider, name) ->
                             var bounds by remember(provider.provider) { mutableStateOf(Rect.Zero) }
                             val span = controller.placement(AppWidgetManager.INVALID_APPWIDGET_ID, provider)
-                            Surface(Modifier.fillMaxWidth().padding(start = 26.dp, bottom = 10.dp)
+                            Surface(Modifier.fillMaxWidth().padding(start = 20.dp, bottom = 6.dp)
                                 .onGloballyPositioned { bounds = it.boundsInRoot() }
                                 .pointerInput(provider.provider) {
                                     detectDragGesturesAfterLongPress(
@@ -156,12 +156,12 @@ fun WidgetPicker(
                                         onDragCancel = { dragging = null }
                                     )
                                 }.clickable { keyboard?.hide(); onSelect(provider, null) },
-                                color = Color.White.copy(alpha = .16f), shape = RoundedCornerShape(14.dp)) {
-                                Column(Modifier.padding(12.dp)) {
-                                    WidgetPreview(provider, false, Modifier.fillMaxWidth().height(110.dp))
+                                color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.large) {
+                                Column(Modifier.padding(10.dp)) {
+                                    WidgetPreview(provider, false, Modifier.fillMaxWidth().height(96.dp))
                                     Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(name, color = Color.White, fontSize = 12.sp)
-                                        Text(span?.let { "${it.columns} × ${it.rows}" } ?: "No space", color = Color.LightGray, fontSize = 12.sp)
+                                        Text(name, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                        Text(span?.let { "${it.columns} × ${it.rows}" } ?: "No space", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                             }
@@ -177,15 +177,15 @@ fun WidgetPicker(
                 Surface(Modifier.offset { IntOffset(
                     (canvasBounds.left - pickerBounds.left + canvasBounds.width / prefs.columns * candidate.column).roundToInt(),
                     (canvasBounds.top - pickerBounds.top + canvasBounds.height / prefs.rows * candidate.row).roundToInt()) }
-                    .size(width, height), color = Color.White.copy(alpha = .2f), shape = RoundedCornerShape(12.dp),
-                    border = androidx.compose.foundation.BorderStroke(2.dp, Color.White)) {
+                    .size(width, height), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .75f), shape = MaterialTheme.shapes.medium,
+                    border = androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)) {
                     WidgetPreview(active, false, Modifier.fillMaxSize().padding(8.dp))
                 }
             }
             Surface(Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp),
-                color = Color(0xCC202020), shape = RoundedCornerShape(22.dp)) {
-                Text(if (candidate != null) "Release to add widget" else "Drag onto free desktop space", color = Color.White,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp))
+                color = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer, shape = MaterialTheme.shapes.medium) {
+                Text(if (candidate != null) "Release to add widget" else "Drag onto free desktop space",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             }
         }
     }
@@ -210,6 +210,6 @@ private fun WidgetPreview(provider: AppWidgetProviderInfo, iconOnly: Boolean, mo
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         bitmap?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
-            ?: Icon(Icons.Rounded.Widgets, null, tint = Color.White, modifier = Modifier.size(32.dp))
+            ?: Icon(Icons.Rounded.Widgets, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
     }
 }
