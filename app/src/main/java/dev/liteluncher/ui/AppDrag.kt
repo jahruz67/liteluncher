@@ -141,7 +141,8 @@ internal fun Modifier.appDropTarget(target: AppDropTarget, priority: Int = 0, ce
 @Composable
 internal fun Modifier.appIconGestures(
     app: AppEntry, area: LayoutArea?, enabled: Boolean,
-    onClick: (() -> Unit)?, onMenu: (() -> Unit)?, folderId: String? = null, movingFolderId: String? = null, desktopPage: Int? = null
+    onClick: (() -> Unit)?, onMenu: (() -> Unit)?, folderId: String? = null, movingFolderId: String? = null, desktopPage: Int? = null,
+    menuBounds: (() -> Rect)? = null
 ): Modifier {
     val drag = LocalAppDrag.current
     if (drag == null) return if (onClick == null && onMenu == null) this
@@ -149,11 +150,16 @@ internal fun Modifier.appIconGestures(
     val token = remember(app.key, area, folderId, desktopPage) { Any() }
     val bounds = remember { mutableStateOf(Rect.Zero) }
     val menu by rememberUpdatedState(onMenu)
+    val anchorBounds by rememberUpdatedState(menuBounds)
     val click by rememberUpdatedState(onClick)
     val feedback = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val showMenu: () -> Unit = { drag.menuAnchor = bounds.value; menu?.invoke() }
+    // Menu placement follows the visible icon; drag coordinates still use the full tile.
+    val showMenu: () -> Unit = {
+        drag.menuAnchor = anchorBounds?.invoke()?.takeUnless { it.isEmpty } ?: bounds.value
+        menu?.invoke()
+    }
     if (!enabled) return onGloballyPositioned { bounds.value = it.boundsInRoot() }
         .combinedClickable(onClick = onClick ?: {}, onLongClick = if (onMenu != null) showMenu else null)
     val target: AppDropTarget? = if (movingFolderId != null) AppDropTarget.Folder(movingFolderId)

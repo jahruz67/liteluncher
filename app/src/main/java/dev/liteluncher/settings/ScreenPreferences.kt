@@ -165,7 +165,7 @@ internal fun LazyListScope.searchPreferences(state: LauncherState, update: ((Lau
         ToggleSetting("Hint on empty screen", s.hint) { v -> update { it.copy(search = it.search.copy(hint = v)) } }
         ToggleSetting("Voice Search", s.voice) { v -> update { it.copy(search = it.search.copy(voice = v)) } }
         ToggleSetting("Show recent apps", s.history) { v -> update { it.copy(search = it.search.copy(history = v)) } }
-        ToggleSetting("List layout", s.grid.listMode) { v -> update { it.copy(search = it.search.copy(grid = it.search.grid.copy(listMode = v))) } }
+        ToggleSetting("App results as a list", s.grid.listMode) { v -> update { it.copy(search = it.search.copy(grid = it.search.grid.copy(listMode = v))) } }
         TextButton(onClick = { write { it.copy(history = emptyList()) } }) { Text("Clear recent apps") }
     } }
 }

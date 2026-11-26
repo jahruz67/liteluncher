@@ -18,8 +18,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -183,13 +186,16 @@ private fun WorkspaceListEntry(key: String, container: String, state: LauncherSt
     when {
         folder != null -> {
             val area = if (container == "dock") LayoutArea.DOCK else LayoutArea.HOME
+            var iconBounds by remember { mutableStateOf(Rect.Zero) }
             val representative = apps.firstOrNull { it.key in folder.apps } ?: AppEntry("folder:${folder.id}", context.packageName,
                 folder.name, android.content.ComponentName(context, dev.liteluncher.MainActivity::class.java), android.os.Process.myUserHandle())
             Row(Modifier.fillMaxWidth().height(72.dp).appDropTarget(AppDropTarget.Folder(folder.id), 3)
                 .appIconGestures(representative, area, !state.folderLocked(folder.id),
-                    { actions.folder(folder, container == "dock") }, { actions.folderActions(folder) }, movingFolderId = folder.id)
+                    { actions.folder(folder, container == "dock") }, { actions.folderActions(folder) }, movingFolderId = folder.id,
+                    menuBounds = { iconBounds })
                 .semantics { contentDescription = folder.name }, verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Folder, null, Modifier.size(40.dp).padding(4.dp), tint = MaterialTheme.colorScheme.primary)
+                Icon(Icons.Rounded.Folder, null, Modifier.size(40.dp).padding(4.dp)
+                    .onGloballyPositioned { iconBounds = it.boundsInRoot() }, tint = MaterialTheme.colorScheme.primary)
                 Text(folder.name, Modifier.weight(1f).padding(start = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }

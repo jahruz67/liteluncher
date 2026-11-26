@@ -100,6 +100,7 @@ fun SearchScreen(
     permissionSignal: Int, query: String, onQuery: (String) -> Unit, onVoice: () -> Unit, actions: WorkspaceActions
 ) {
     val prefs = state.prefs.search
+    val appRowPrefs = prefs.grid.copy(labels = true, iconScale = prefs.grid.iconScale * 1.2f)
     val context = LocalContext.current
     val clipboard = context.getSystemService(ClipboardManager::class.java)
     val keyboard = LocalSoftwareKeyboardController.current
@@ -287,7 +288,10 @@ fun SearchScreen(
                             }
                             SearchTarget.APPS -> if (matches.isNotEmpty()) {
                                 item { SectionLabel("Applications · ${matches.size}") }
-                                if (prefs.grid.listMode) items(matches, key = { it.key }) { app -> AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs.grid, draggable = true) }
+                                if (prefs.grid.listMode) items(matches, key = { it.key }) { app ->
+                                    AppListRow(app, repository, state, { keyboard?.hide(); actions.launch(app) }, { actions.menu(app) },
+                                        appRowPrefs, draggable = true, modifier = Modifier.heightIn(min = 64.dp))
+                                }
                                 else items(matches.chunked(prefs.grid.columns)) { row ->
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
                                         row.forEach { app ->
@@ -301,7 +305,8 @@ fun SearchScreen(
                             SearchTarget.HIDDEN_APPS -> if (hiddenMatches.isNotEmpty()) {
                                 item { SectionLabel("Hidden applications · ${hiddenMatches.size}") }
                                 if (prefs.grid.listMode) items(hiddenMatches, key = { "hidden:${it.key}" }) { app ->
-                                    AppListRow(app, repository, state, { actions.launch(app) }, { actions.menu(app) }, prefs.grid)
+                                    AppListRow(app, repository, state, { keyboard?.hide(); actions.launch(app) }, { actions.menu(app) },
+                                        appRowPrefs, modifier = Modifier.heightIn(min = 64.dp))
                                 } else items(hiddenMatches.chunked(prefs.grid.columns)) { row ->
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy((prefs.grid.spacing / 2).dp)) {
                                         row.forEach { app ->

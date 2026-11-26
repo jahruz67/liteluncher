@@ -33,9 +33,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -525,12 +528,15 @@ fun AppDrawer(
 
 @Composable
 fun AppListRow(app: AppEntry, repository: AppsRepository, state: LauncherState, onClick: () -> Unit, onLongClick: () -> Unit,
-    prefs: GridPrefs = state.prefs.drawer, draggable: Boolean = false, dragArea: LayoutArea? = null) {
+    prefs: GridPrefs = state.prefs.drawer, draggable: Boolean = false, dragArea: LayoutArea? = null,
+    modifier: Modifier = Modifier) {
     val label = state.overrides[app.key]?.label?.ifBlank { app.label } ?: app.label
     val badges by LauncherNotificationService.counts.collectAsStateWithLifecycle()
-    Row(Modifier.fillMaxWidth().semantics { contentDescription = label }.clip(RoundedCornerShape(15.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick)
+    var iconBounds by remember { mutableStateOf(Rect.Zero) }
+    Row(modifier.fillMaxWidth().semantics { contentDescription = label }.clip(RoundedCornerShape(15.dp))
+        .appIconGestures(app, dragArea, draggable, onClick, onLongClick, menuBounds = { iconBounds })
         .padding(vertical = 4.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        AppIcon(app, repository, state, (40 * prefs.iconScale).toInt())
+        AppIcon(app, repository, state, (40 * prefs.iconScale).toInt(), Modifier.onGloballyPositioned { iconBounds = it.boundsInRoot() })
         if (prefs.labels) Text(label, modifier = Modifier.padding(start = 10.dp).weight(1f), fontSize = (14 * prefs.textScale).sp,
             maxLines = if (prefs.multiline) 2 else 1, overflow = TextOverflow.Ellipsis)
         else Spacer(Modifier.weight(1f))

@@ -350,14 +350,25 @@ class AppsRepository(context: Context) : AutoCloseable {
         }
     }.getOrDefault(emptyMap())
 
-    fun cachedIconBitmap(app: AppEntry, iconPack: String): Bitmap? = imageLoader.cached("$iconPack|${app.key}")
+    private data class IconBitmapKey(val app: String, val pack: String, val adaptive: Boolean)
 
-    fun iconBitmap(app: AppEntry, iconPack: String): Bitmap? =
-        imageLoader.load("$iconPack|${app.key}") {
-            runCatching { icon(app, iconPack)?.toBitmap(168, 168) }.getOrNull()
+    fun cachedIconBitmap(app: AppEntry, iconPack: String, forceAdaptive: Boolean = false): Bitmap? =
+        imageLoader.cached(IconBitmapKey(app.key, iconPack, forceAdaptive))
+
+    fun iconBitmap(app: AppEntry, iconPack: String, forceAdaptive: Boolean = false): Bitmap? =
+        imageLoader.load(IconBitmapKey(app.key, iconPack, forceAdaptive)) {
+            runCatching {
+                val drawable = icon(app, iconPack, badged = !forceAdaptive) ?: return@runCatching null
+                if (!forceAdaptive) drawable.toBitmap(168, 168)
+                else {
+                    val bitmap = imageLoader.adaptive(drawable)
+                    // Badge after adaptation so work-profile badges are not enlarged with the artwork.
+                    packages.getUserBadgedIcon(BitmapDrawable(context.resources, bitmap), app.user).toBitmap(168, 168)
+                }
+            }.getOrNull()
         }
 
-    fun icon(app: AppEntry, iconPack: String = ""): Drawable? {
+    fun icon(app: AppEntry, iconPack: String = "", badged: Boolean = true): Drawable? {
         if (!profileAvailable(app.user)) return null
         if (iconPack.isNotBlank()) {
             val themed = runCatching {
@@ -376,12 +387,12 @@ class AppsRepository(context: Context) : AutoCloseable {
                 val name = mapping[app.component.flattenToString()]
                     ?: mapping[app.component.flattenToShortString()]
                 val id = name?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
-                if (id != 0) packages.getUserBadgedIcon(resources.getDrawable(id, null), app.user)
+                if (id != 0) resources.getDrawable(id, null).let { if (badged) packages.getUserBadgedIcon(it, app.user) else it }
                 else if (packInfo != null && (packInfo.iconBack != null || packInfo.iconMask != null || packInfo.iconUpon != null)) {
                     val baseDrawable = runCatching {
                         launcher.getActivityList(app.packageName, app.user)
                             .firstOrNull { it.componentName == app.component }
-                            ?.getBadgedIcon(context.resources.displayMetrics.densityDpi)
+                            ?.let { if (badged) it.getBadgedIcon(context.resources.displayMetrics.densityDpi) else it.getIcon(context.resources.displayMetrics.densityDpi) }
                     }.getOrNull()
                     val backId = packInfo.iconBack?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
                     val maskId = packInfo.iconMask?.let { resources.getIdentifier(it.substringAfterLast('/'), "drawable", iconPack) } ?: 0
@@ -422,7 +433,7 @@ class AppsRepository(context: Context) : AutoCloseable {
         return runCatching {
             launcher.getActivityList(app.packageName, app.user)
                 .firstOrNull { it.componentName == app.component }
-                ?.getBadgedIcon(context.resources.displayMetrics.densityDpi)
+                ?.let { if (badged) it.getBadgedIcon(context.resources.displayMetrics.densityDpi) else it.getIcon(context.resources.displayMetrics.densityDpi) }
         }.getOrNull()
     }
 

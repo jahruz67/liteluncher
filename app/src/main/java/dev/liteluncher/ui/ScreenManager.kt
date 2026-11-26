@@ -38,7 +38,7 @@ class ScreenManager(initial: Screen = Screen.HOME) {
     }
 
     fun onPageSettled(screen: Screen, prefs: NavigationPrefs) {
-        if (screen in prefs.horizontalScreens()) current = screen
+        if (screen in prefs.horizontalScreens() || screen == Screen.FAVORITES && screen in prefs.enabledScreens) current = screen
     }
 
     fun swipe(direction: Direction, prefs: NavigationPrefs) {

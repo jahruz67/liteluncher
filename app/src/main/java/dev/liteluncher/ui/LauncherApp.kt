@@ -24,6 +24,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -162,6 +163,9 @@ fun LauncherApp(
     val horizontalScreens = state.prefs.navigation.horizontalScreens()
     val horizontalPaging = state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide"
     val pager = rememberPagerState(initialPage = horizontalScreens.indexOf(manager.current).coerceAtLeast(0), pageCount = { horizontalScreens.size })
+    val verticalPaging = state.prefs.behavior.animations && state.prefs.behavior.verticalTransition == "Slide" &&
+        Screen.FAVORITES in state.prefs.navigation.enabledScreens
+    val verticalPager = rememberPagerState(initialPage = if (manager.current == Screen.FAVORITES) 1 else 0, pageCount = { 2 })
     val favoritesListState = rememberLazyListState()
 
     val toast: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
@@ -476,7 +480,10 @@ fun LauncherApp(
                 currentDesktopPage.toFloat() / (state.prefs.desktop.pageCount - 1)
             else if (horizontalScreens.size <= 1) 0f else
                 (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, (horizontalScreens.size - 1).toFloat()) / (horizontalScreens.size - 1)
-            progress to if (behavior.wallpaperScroll == "Horizontal") .5f else (.5f + manager.current.y * .5f)
+            val verticalProgress = if (verticalPaging && manager.current != Screen.SEARCH)
+                (verticalPager.currentPage + verticalPager.currentPageOffsetFraction).coerceIn(0f, 1f)
+            else manager.current.y.toFloat()
+            progress to if (behavior.wallpaperScroll == "Horizontal") .5f else (.5f + verticalProgress * .5f)
         }
     }
     val wallpaperManager = remember(context) { WallpaperManager.getInstance(context) }
@@ -571,8 +578,10 @@ fun LauncherApp(
                 } else {
                     val navigationRevision = manager.navigationRevision
                     var completedNavigation by remember { mutableStateOf<Pair<Long, List<Screen>>?>(null) }
+                    var completedVerticalNavigation by remember { mutableStateOf<Long?>(null) }
                     var workspacePointerCount by remember { mutableIntStateOf(0) }
                     var pagerHandledGesture by remember { mutableStateOf(false) }
+                    var verticalPagerHandledGesture by remember { mutableStateOf(false) }
                     var pageIndicatorsVisible by remember { mutableStateOf(true) }
                     LaunchedEffect(pager.isScrollInProgress, navigationRevision, manager.current) {
                         pageIndicatorsVisible = true
@@ -581,14 +590,14 @@ fun LauncherApp(
                             pageIndicatorsVisible = false
                         }
                     }
-                    LaunchedEffect(navigationRevision, horizontalScreens, horizontalPaging) {
+                    LaunchedEffect(navigationRevision, horizontalScreens, horizontalPaging, verticalPaging) {
                         completedNavigation = null
                         if (!horizontalPaging) return@LaunchedEffect
                         try {
-                            val target = horizontalScreens.indexOf(if (manager.current == Screen.SEARCH) Screen.HOME else manager.current)
+                            val target = horizontalScreens.indexOf(if (manager.current == Screen.SEARCH || verticalPaging && manager.current == Screen.FAVORITES) Screen.HOME else manager.current)
                             if (target >= 0 && (pager.isScrollInProgress || pager.currentPage != target || pager.currentPageOffsetFraction != 0f)) {
                                 pager.stopScroll(MutatePriority.PreventUserInput)
-                                if (manager.current != Screen.SEARCH && drag.active == null && state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide") pager.animateScrollToPage(target)
+                                if (manager.current != Screen.SEARCH && manager.current != Screen.FAVORITES && drag.active == null && state.prefs.behavior.animations && state.prefs.behavior.horizontalTransition == "Slide") pager.animateScrollToPage(target)
                                 else pager.scrollToPage(target)
                             }
                         } finally {
@@ -607,30 +616,70 @@ fun LauncherApp(
                             }
                         }
                     }
+                    LaunchedEffect(navigationRevision, verticalPaging) {
+                        completedVerticalNavigation = null
+                        if (!verticalPaging) return@LaunchedEffect
+                        try {
+                            val target = if (manager.current == Screen.FAVORITES) 1 else 0
+                            if (verticalPager.isScrollInProgress || verticalPager.currentPage != target || verticalPager.currentPageOffsetFraction != 0f) {
+                                verticalPager.stopScroll(MutatePriority.PreventUserInput)
+                                if (manager.current != Screen.SEARCH && drag.active == null) verticalPager.animateScrollToPage(target)
+                                else verticalPager.scrollToPage(target)
+                            }
+                        } finally {
+                            if (manager.navigationRevision == navigationRevision) completedVerticalNavigation = navigationRevision
+                        }
+                    }
+                    LaunchedEffect(verticalPager, verticalPaging) {
+                        snapshotFlow {
+                            if (verticalPaging && !verticalPager.isScrollInProgress && completedVerticalNavigation == manager.navigationRevision &&
+                                (manager.current == Screen.HOME || manager.current == Screen.FAVORITES))
+                                if (verticalPager.settledPage == 1) Screen.FAVORITES else Screen.HOME
+                            else null
+                        }.filterNotNull().collect { screen ->
+                            if (screen != manager.current) {
+                                manager.onPageSettled(screen, state.prefs.navigation)
+                                folder = null
+                            }
+                        }
+                    }
                     val swipeWithPager = state.prefs.navigation.fingers == 1 && !state.prefs.navigation.infinite && horizontalPaging &&
                         listOf(Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT).all {
                             state.prefs.gestures[it]?.action == Action.NAVIGATE
                         }
-                    BackHandler(enabled = horizontalPaging && pager.isScrollInProgress && manager.current in horizontalScreens && folder == null) {
+                    val swipeWithVerticalPager = state.prefs.navigation.fingers == 1 && !state.prefs.navigation.infinite && verticalPaging &&
+                        listOf(Gesture.SWIPE_UP, Gesture.SWIPE_DOWN).all {
+                            state.prefs.gestures[it]?.action == Action.NAVIGATE
+                        }
+                    BackHandler(enabled = folder == null && (horizontalPaging && pager.isScrollInProgress && manager.current in horizontalScreens ||
+                        verticalPaging && verticalPager.isScrollInProgress)) {
                         navigate(Screen.HOME)
                     }
                     val gestureModifier = Modifier.launcherGestures(
                         fingers = state.prefs.navigation.fingers,
                         home = manager.current == Screen.HOME,
-                        interceptVerticalSwipes = !state.prefs.home.listMode,
-                        interceptDownwardSwipes = manager.current == Screen.FAVORITES && !favoritesListState.canScrollBackward,
+                        interceptVerticalSwipes = !state.prefs.home.listMode && !swipeWithVerticalPager,
+                        interceptDownwardSwipes = !swipeWithVerticalPager && manager.current == Screen.FAVORITES && !favoritesListState.canScrollBackward,
                         onPointerCountChange = { count ->
                             if (count > 0) {
-                                if (workspacePointerCount == 0) pagerHandledGesture = false
+                                if (workspacePointerCount == 0) {
+                                    pagerHandledGesture = false
+                                    verticalPagerHandledGesture = false
+                                }
                                 pagerHandledGesture = pagerHandledGesture || pager.isScrollInProgress
+                                verticalPagerHandledGesture = verticalPagerHandledGesture || verticalPager.isScrollInProgress
                             }
                             if (count >= 2) drag.cancel()
-                            if (count >= 2 && workspacePointerCount < 2 && swipeWithPager && manager.current in horizontalScreens) {
+                            if (count >= 2 && workspacePointerCount < 2 &&
+                                (swipeWithPager && manager.current in horizontalScreens || swipeWithVerticalPager &&
+                                    (manager.current == Screen.HOME || manager.current == Screen.FAVORITES))) {
                                 manager.navigate(manager.current, state.prefs.navigation)
                             }
                             workspacePointerCount = count
                         },
                         onSwipe = swipe@{ direction, fingers ->
+                            if (fingers == 1 && swipeWithVerticalPager && verticalPagerHandledGesture &&
+                                (direction == Direction.UP || direction == Direction.DOWN)) return@swipe
                             if (fingers == 1 && swipeWithPager && pagerHandledGesture && manager.current in horizontalScreens &&
                                 (direction == Direction.LEFT || direction == Direction.RIGHT)) return@swipe
                             val gesture = when (direction) {
@@ -782,7 +831,8 @@ fun LauncherApp(
                         Box(Modifier.fillMaxSize()) {
                         // Keep the workspace composed while search is open, ready for a held icon.
                         AnimatedContent(
-                            targetState = if (horizontalPaging && workspaceScreen in horizontalScreens) Screen.HOME else workspaceScreen,
+                            targetState = if (horizontalPaging && workspaceScreen in horizontalScreens ||
+                                verticalPaging && (workspaceScreen == Screen.HOME || workspaceScreen == Screen.FAVORITES)) Screen.HOME else workspaceScreen,
                             modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (searching) 0f else 1f }
                                 .then(if (searching) Modifier.clearAndSetSemantics {} else Modifier),
                             transitionSpec = {
@@ -797,30 +847,42 @@ fun LauncherApp(
                             },
                             label = "Directional workspace"
                         ) { screen ->
-                            if (horizontalPaging && screen == Screen.HOME) {
-                                Box(Modifier.fillMaxSize().clipToBounds()) {
-                                    HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(),
-                                        beyondViewportPageCount = 1,
-                                        key = { horizontalScreens[it] }, userScrollEnabled = swipeWithPager && workspacePointerCount < 2 && drag.active == null) { page -> renderPage(horizontalScreens[page]) }
-                                    val homePage = horizontalScreens.indexOf(Screen.HOME)
-                                    val dockHideProgress by remember(pager, homePage) {
-                                        derivedStateOf {
-                                            (kotlin.math.abs(pager.currentPage - homePage + pager.currentPageOffsetFraction) * 2f).coerceIn(0f, 1f)
+                            val renderWorkspace: @Composable () -> Unit = {
+                                if (horizontalPaging && screen == Screen.HOME) {
+                                    Box(Modifier.fillMaxSize().clipToBounds()) {
+                                        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(),
+                                            beyondViewportPageCount = 1,
+                                            key = { horizontalScreens[it] }, userScrollEnabled = swipeWithPager && workspacePointerCount < 2 && drag.active == null &&
+                                                manager.current in horizontalScreens && (!verticalPaging || !verticalPager.isScrollInProgress)) { page -> renderPage(horizontalScreens[page]) }
+                                        val homePage = horizontalScreens.indexOf(Screen.HOME)
+                                        val dockHideProgress by remember(pager, homePage) {
+                                            derivedStateOf {
+                                                (kotlin.math.abs(pager.currentPage - homePage + pager.currentPageOffsetFraction) * 2f).coerceIn(0f, 1f)
+                                            }
+                                        }
+                                        if (state.prefs.dock.enabled) {
+                                            val left = state.prefs.dock.side == "Left"
+                                            Box(Modifier.align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
+                                                .graphicsLayer {
+                                                    // Follow the finger without rebuilding the dock as it leaves or returns.
+                                                    val progress = if (state.prefs.dock.showWhenScrolling && pager.isScrollInProgress) 0f else dockHideProgress
+                                                    translationX = size.width * progress * if (left) -1f else 1f
+                                                }) {
+                                                FloatingDock(state, apps, model.apps, badges, actions, pager.isScrollInProgress)
+                                            }
                                         }
                                     }
-                                    if (state.prefs.dock.enabled) {
-                                        val left = state.prefs.dock.side == "Left"
-                                        Box(Modifier.align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
-                                            .graphicsLayer {
-                                                // Follow the finger without rebuilding the dock as it leaves or returns.
-                                                val progress = if (state.prefs.dock.showWhenScrolling && pager.isScrollInProgress) 0f else dockHideProgress
-                                                translationX = size.width * progress * if (left) -1f else 1f
-                                            }) {
-                                            FloatingDock(state, apps, model.apps, badges, actions, pager.isScrollInProgress)
-                                        }
-                                    }
+                                } else renderPage(screen)
+                            }
+                            if (verticalPaging && screen == Screen.HOME) {
+                                // Nested scrolling lets Favorites consume list movement before returning Home.
+                                VerticalPager(state = verticalPager, modifier = Modifier.fillMaxSize().clipToBounds(),
+                                    beyondViewportPageCount = 1,
+                                    userScrollEnabled = swipeWithVerticalPager && workspacePointerCount < 2 && drag.active == null &&
+                                        !pager.isScrollInProgress && (manager.current == Screen.HOME || manager.current == Screen.FAVORITES)) { page ->
+                                    if (page == 0) renderWorkspace() else renderPage(Screen.FAVORITES)
                                 }
-                            } else renderPage(screen)
+                            } else renderWorkspace()
                         }
                         androidx.compose.animation.AnimatedVisibility(
                             visible = searching,

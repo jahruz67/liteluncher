@@ -97,7 +97,7 @@ data class SearchPrefs(
     val shortcuts: Boolean = true, val settings: Boolean = true, val math: Boolean = true,
     val web: Boolean = false, val playStore: Boolean = true, val history: Boolean = true,
     val engine: WebEngine = WebEngine.GOOGLE, val customUrl: String = "https://www.google.com/search?q={query}",
-    val grid: GridPrefs = GridPrefs(columns = 4), val website: Boolean = true,
+    val grid: GridPrefs = GridPrefs(columns = 4, listMode = true), val website: Boolean = true,
     val targetOrder: List<SearchTarget> = SearchTarget.entries.toList(),
     val barScreens: Set<Screen> = setOf(Screen.HOME, Screen.APPS, Screen.FAVORITES),
     val barAtBottom: Boolean = false, val barText: String = "Search", val hint: Boolean = true, val voice: Boolean = true
@@ -137,7 +137,7 @@ data class FolderPrefs(val color: String = "#80303030", val opacity: Float = 1f,
 data class BehaviorPrefs(
     val lockRotation: Boolean = true, val showStatusBar: Boolean = true,
     val wallpaperScroll: String = "Off", val horizontalTransition: String = "Slide",
-    val verticalTransition: String = "Fade", val borders: Boolean = false, val animations: Boolean = true,
+    val verticalTransition: String = "Slide", val borders: Boolean = false, val animations: Boolean = true,
     val pageIndicators: Boolean = true, val returnHome: Boolean = true, val contextSettings: Boolean = true,
     val wallpaperAlignment: String = "Center"
 )

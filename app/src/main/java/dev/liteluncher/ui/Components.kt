@@ -25,11 +25,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -69,25 +72,26 @@ internal fun badgeCounts(prefs: LauncherPrefs): Boolean = when (prefs.badges.sty
 fun AppIcon(app: AppEntry, repository: AppsRepository, state: LauncherState, size: Int = 48, modifier: Modifier = Modifier) {
     val override = state.overrides[app.key]
     val pack = state.prefs.appearance.iconPack
+    val forceAdaptive = state.prefs.appearance.forceAdaptive
     val iconRevision by repository.iconRevision.collectAsStateWithLifecycle()
     val uri = override?.iconUri.orEmpty()
     val backup = override?.backupIcon.takeIf { uri.isBlank() }
     val cachedBackup = backup?.let { repository.imageLoader.cached(it) }
-    val cached = cachedBackup ?: if (uri.isBlank()) repository.cachedIconBitmap(app, pack) else repository.imageLoader.cachedCustom(uri)
-    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, uri, backup, pack, iconRevision) {
+    val cached = cachedBackup ?: if (uri.isBlank()) repository.cachedIconBitmap(app, pack, forceAdaptive) else repository.imageLoader.cachedCustom(uri)
+    val bitmap by produceState<android.graphics.Bitmap?>(cached, app.key, uri, backup, pack, forceAdaptive, iconRevision) {
         value = cached
         if (cachedBackup != null || (backup == null && cached != null)) return@produceState
         value = withContext(repository.imageLoader.dispatcher) {
             backup?.let { repository.imageLoader.backup(it) } ?: cached ?:
-                repository.imageLoader.custom(uri) ?: repository.iconBitmap(app, pack)
+                repository.imageLoader.custom(uri) ?: repository.iconBitmap(app, pack, forceAdaptive)
         }
     }
-    val shape = iconShape(override?.shape ?: state.prefs.appearance.iconShape)
-    Box(modifier.size(size.dp).clip(shape)
-        .then(if (state.prefs.appearance.forceAdaptive) Modifier.background(MaterialTheme.colorScheme.surface) else Modifier), contentAlignment = Alignment.Center) {
+    val selectedShape = override?.shape ?: state.prefs.appearance.iconShape
+    val shape = iconShape(if (forceAdaptive && selectedShape == IconShape.ORIGINAL) IconShape.SQUIRCLE else selectedShape)
+    Box(modifier.size(size.dp).clip(shape), contentAlignment = Alignment.Center) {
         val displayed = bitmap
         if (displayed != null) Image(displayed.asImageBitmap(), contentDescription = null,
-            modifier = Modifier.fillMaxSize().then(if (state.prefs.appearance.forceAdaptive) Modifier.padding((size * .12f).dp) else Modifier), contentScale = ContentScale.Fit)
+            modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
             Text(app.label.take(1).uppercase(), color = MaterialTheme.colorScheme.onSecondaryContainer, fontSize = (size / 2).sp)
         }
@@ -104,11 +108,13 @@ fun AppTile(
     val iconSize = (56 * prefs.iconScale).toInt()
     val textScale = prefs.textScale.coerceIn(0.5f, 1.5f)
     val showCount = badgeCounts(state.prefs)
-    Column(modifier.clip(RoundedCornerShape(16.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick, dragFolderId, desktopPage = desktopPage)
+    var iconBounds by remember { mutableStateOf(Rect.Zero) }
+    Column(modifier.clip(RoundedCornerShape(16.dp)).appIconGestures(app, dragArea, draggable, onClick, onLongClick, dragFolderId,
+        desktopPage = desktopPage, menuBounds = { iconBounds })
         .padding(vertical = 4.dp, horizontal = 2.dp).semantics { contentDescription = label },
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box {
-            AppIcon(app, repository, state, iconSize)
+            AppIcon(app, repository, state, iconSize, Modifier.onGloballyPositioned { iconBounds = it.boundsInRoot() })
             if (state.prefs.badges.enabled && badgeCount > 0) {
                 val badgeSize = ((if (showCount) 19 else 10) * state.prefs.badges.scale).dp
                 Box(Modifier.align(Alignment.TopEnd).offset(3.dp, (-3).dp).size(badgeSize)
@@ -141,18 +147,20 @@ fun FolderTile(folder: FolderItem, apps: List<AppEntry>, repository: AppsReposit
         folder.name, android.content.ComponentName(context, dev.liteluncher.MainActivity::class.java), android.os.Process.myUserHandle())
     val area = when (container) { "dock" -> LayoutArea.DOCK; "home" -> LayoutArea.HOME; else -> null }
     val folderPrefs = state.prefs.folders
+    var iconBounds by remember { mutableStateOf(Rect.Zero) }
     Column(modifier.semantics { contentDescription = folder.name }.clip(RoundedCornerShape(16.dp)).appDropTarget(AppDropTarget.Folder(folder.id), 3)
         .then(Modifier.appIconGestures(representative, area,
             !state.folderLocked(folder.id) && (container == "home" && folder.id in state.homeFolders || container == "dock" && folder.id in state.dockFolders || container.startsWith("desktop:") && folder.id in state.desktopApps.values.flatten()),
             onClick, onLongClick, movingFolderId = folder.id,
-            desktopPage = container.takeIf { it.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull())
+            desktopPage = container.takeIf { it.startsWith("desktop:") }?.substringAfter(':')?.toIntOrNull(),
+            menuBounds = { iconBounds })
         ).padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val size = (56 * prefs.iconScale).dp
         val folderColor = if (folderPrefs.background == "Custom") parseColor(folderPrefs.color)
             else surfaceColor(state.prefs.appearance.launcher, MaterialTheme.colorScheme.primary)
         val shape = iconShape(folder.shape ?: folderPrefs.shape)
-        Box(Modifier.size(size).clip(shape)
+        Box(Modifier.size(size).onGloballyPositioned { iconBounds = it.boundsInRoot() }.clip(shape)
             .background(folderColor.copy(alpha = folderColor.alpha * folderPrefs.opacity)), contentAlignment = Alignment.Center) {
             val members = remember(folder.apps, apps) {
                 folder.apps.asSequence().mapNotNull { key -> apps.find { it.key == key } }.take(4).toList()

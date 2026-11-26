@@ -3,6 +3,10 @@ package dev.liteluncher.platform
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.util.Base64
 import android.util.LruCache
@@ -94,6 +98,28 @@ internal class IconBitmapLoader(private val context: Context) {
                 if (id == 0) null else resources.getDrawable(id, null).toBitmap(168, 168)
             } else null
         }.getOrNull()
+    }
+
+    /** Leave masking to the launcher so the device's icon mask is not baked in first. */
+    fun adaptive(drawable: Drawable): Bitmap {
+        val size = 168
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        if (drawable is AdaptiveIconDrawable) {
+            val inset = (size * AdaptiveIconDrawable.getExtraInsetFraction()).toInt()
+            listOf(drawable.background, drawable.foreground).forEach { layer ->
+                layer?.apply {
+                    setBounds(-inset, -inset, size + inset, size + inset)
+                    draw(canvas)
+                }
+            }
+        } else {
+            canvas.drawColor(Color.WHITE)
+            val inset = (size * .12f).toInt()
+            drawable.setBounds(inset, inset, size - inset, size - inset)
+            drawable.draw(canvas)
+        }
+        return bitmap
     }
 
     fun clear() {
